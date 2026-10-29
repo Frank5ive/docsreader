@@ -107,7 +107,7 @@ async function loadLibrary() {
 async function showLibrary() {
   clearTimeout(saveT); await flush(); stopTimer(); cur = null;
   $('library').hidden = false; $('reader').hidden = true; for (const p of panels) $(p).hidden = true;
-  $('selbar').hidden = true;
+  $('selbar').hidden = $('hlbar').hidden = true;
   for (const b of ['tocBtn', 'histBtn', 'markBtn', 'notesBtn', 'findBtn']) $(b).hidden = true; $('title').textContent = 'docsreader';
   loadLibrary();
 }
@@ -381,10 +381,24 @@ function renderHighlights() {
   }
 }
 document.addEventListener('click', (e) => {
-  const m = e.target.closest('mark.hl'); if (!m || !cur || !getSelection().isCollapsed) return;
-  if ($('notes').hidden) togglePanel('notes');
-  renderNotesPanel(m.dataset.id);
+  const m = e.target.closest('mark.hl');
+  if (!m || !cur || !getSelection().isCollapsed) { if (!$('hlbar').contains(e.target)) $('hlbar').hidden = true; return; }
+  // Clicking a highlight offers Remove / Notes right beside it.
+  const bar = $('hlbar'), r = m.getBoundingClientRect();
+  bar.dataset.id = m.dataset.id; bar.hidden = false;
+  bar.style.top = Math.max(56, r.top - 46) + 'px';
+  bar.style.left = Math.min(innerWidth - 230, Math.max(8, r.left)) + 'px';
 });
+$('hlRemove').onclick = async () => {
+  const id = $('hlbar').dataset.id; $('hlbar').hidden = true;
+  await api(`/api/books/${cur.id}/annotations/${id}`, { method: 'DELETE' });
+  await loadAnns(); toast('Highlight removed');
+};
+$('hlNotes').onclick = () => {
+  const id = $('hlbar').dataset.id; $('hlbar').hidden = true;
+  if ($('notes').hidden) togglePanel('notes');
+  renderNotesPanel(id);
+};
 
 // Selection -> anchor coordinates (block index + character offset).
 function pointOf(node, off) {

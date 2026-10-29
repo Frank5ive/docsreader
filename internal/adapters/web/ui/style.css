@@ -53,6 +53,7 @@ aside select,aside input[type=range]{width:100%;margin-top:.2rem}
 .ann .acts{display:flex;gap:.4rem;margin-top:.3rem}
 #selbar{position:fixed;z-index:8;gap:.3rem;padding:.3rem;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px #0004}
 
+#hlbar{position:fixed;z-index:8;display:flex;gap:.3rem;padding:.3rem;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px #0004}
 #selbar textarea{width:240px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.3rem;display:block;margin-bottom:.3rem}
 #toast{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:.5rem .9rem;border-radius:8px;z-index:20;max-width:90vw;font-size:.9rem}
 #markBtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
