@@ -432,7 +432,10 @@ const bookmarkHere = () => {
   const a = currentAnchor();
   return (cur.anns || []).find((x) => x.kind === 'bookmark' && x.start.section === a.section && (isPdf() || x.start.block === a.block));
 };
-function updateMarkBtn() { if (cur) $('markBtn').classList.toggle('on', !!bookmarkHere()); }
+function updateMarkBtn() {
+  if (!cur || (isPdf() && !cur.pdf)) return; // PDF not loaded yet: no page to compare
+  $('markBtn').classList.toggle('on', !!bookmarkHere());
+}
 async function toggleBookmark() {
   if (!cur) return;
   const have = bookmarkHere();
@@ -508,3 +511,6 @@ $('findInput').oninput = debounce(() =>
 addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'f' && cur && !$('reader').hidden) { e.preventDefault(); $('findBtn').click(); }
 });
+
+// Surface unexpected errors instead of leaving a silently blank reader.
+addEventListener('unhandledrejection', (e) => toast('Error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason)));
