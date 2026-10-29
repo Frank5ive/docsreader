@@ -70,8 +70,61 @@ function coverEl(b) {
   else d.textContent = b.Title;
   return d;
 }
+function fmtDur(sec) {
+  const m = Math.round(sec / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+// Reading speed from real data once there is enough of it, otherwise a typical 230 wpm.
+const speedOf = (st) => (st.totalSeconds >= 300 && st.wordsPerMin >= 50 && st.wordsPerMin <= 700 ? st.wordsPerMin : 230);
+function etaOf(b, st) {
+  if (!b.WordCount || !b.progress || b.progress.percent >= 0.999) return '';
+  return '~' + fmtDur((b.WordCount * (1 - b.progress.percent) / speedOf(st)) * 60) + ' left';
+}
+function statCard(label, value) {
+  const d = document.createElement('div'); d.className = 'stat';
+  const v = document.createElement('b'); v.textContent = value;
+  const l = document.createElement('small'); l.textContent = label;
+  d.append(v, l); return d;
+}
+function renderStats(st, times, books) {
+  const box = $('stats'); box.replaceChildren();
+  if (!st.sessions) { box.textContent = 'Your reading stats will appear here once you have read for a while.'; return; }
+  const cards = document.createElement('div'); cards.className = 'cards';
+  cards.append(
+    statCard('Total reading time', fmtDur(st.totalSeconds)),
+    statCard('Reading speed', Math.round(speedOf(st)) + ' wpm'),
+    statCard('Current streak', st.streakDays + (st.streakDays === 1 ? ' day' : ' days')),
+    statCard('Longest streak', st.longestStreak + (st.longestStreak === 1 ? ' day' : ' days')),
+    statCard('Sessions', String(st.sessions)));
+  // Last 30 days, oldest first; bar height is relative to the busiest day.
+  const days = [];
+  for (let i = 29; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push(d); }
+  const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const max = Math.max(60, ...days.map((d) => st.perDay[key(d)] || 0));
+  const chart = document.createElement('div'); chart.className = 'chart'; chart.id = 'chart';
+  for (const d of days) {
+    const sec = st.perDay[key(d)] || 0;
+    const bar = document.createElement('i');
+    bar.style.height = Math.max(sec ? 4 : 1, (sec / max) * 100) + '%';
+    bar.title = `${d.toLocaleDateString()}: ${sec ? fmtDur(sec) : 'no reading'}`;
+    bar.dataset.sec = sec;
+    if (sec) bar.className = 'on';
+    chart.append(bar);
+  }
+  const h = document.createElement('h3'); h.textContent = 'Last 30 days';
+  const per = document.createElement('div'); per.className = 'perbook';
+  const ph = document.createElement('h3'); ph.textContent = 'Time per book';
+  const rows = books.filter((b) => times[b.ID]).sort((a, b) => times[b.ID].seconds - times[a.ID].seconds);
+  for (const b of rows) {
+    const r = document.createElement('div');
+    const n = document.createElement('span'); n.textContent = b.Title;
+    const t = document.createElement('span'); t.textContent = fmtDur(times[b.ID].seconds);
+    r.append(n, t); per.append(r);
+  }
+  box.append(cards, h, chart, ph, per);
+}
 async function loadLibrary() {
-  const books = await api('/api/books');
+  const [books, st, times] = await Promise.all([api('/api/books'), api('/api/stats'), api('/api/stats/books')]);
   const shelf = $('shelf'); shelf.replaceChildren();
   for (const b of books) {
     const c = document.createElement('div'); c.className = 'card';
@@ -85,6 +138,7 @@ async function loadLibrary() {
     const fill = document.createElement('i'); fill.style.width = pct(b) + '%'; bar.append(fill);
     const del = document.createElement('button'); del.className = 'del'; del.textContent = '×';
     del.onclick = async (e) => { e.stopPropagation(); if (confirm('Remove "' + b.Title + '"?')) { await api('/api/books/' + b.ID, { method: 'DELETE' }); loadLibrary(); } };
+    c.title = etaOf(b, st);
     c.append(coverEl(b), bar, meta, del);
     c.onclick = () => openBook(b.ID);
     shelf.append(c);
@@ -96,13 +150,10 @@ async function loadLibrary() {
     const info = document.createElement('div');
     info.innerHTML = '<small>Continue reading</small><h3 style="margin:.2rem 0"></h3><span></span>';
     info.querySelector('h3').textContent = last.Title;
-    info.querySelector('span').textContent = `${pct(last)}% read · ${ago(last.lastRead)}`;
+    info.querySelector('span').textContent = [`${pct(last)}% read`, ago(last.lastRead), etaOf(last, st)].filter(Boolean).join(' · ');
     h.append(coverEl(last), info); h.onclick = () => openBook(last.ID); cont.append(h);
   }
-  const st = await api('/api/stats');
-  $('stats').textContent = st.totalSeconds
-    ? `Read ${Math.round(st.totalSeconds / 60)} min total · ${Math.round(st.wordsPerMin)} words/min · ${st.streakDays}-day streak`
-    : 'Your reading stats will appear here.';
+  renderStats(st, times, books);
 }
 async function showLibrary() {
   clearTimeout(saveT); await flush(); stopTimer(); cur = null;
@@ -117,6 +168,7 @@ async function openBook(id, target) {
   const info = await api('/api/books/' + id);
   cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: target || (info.hasProgress ? info.progress : null), section: 0, pdf: null, anns: [] };
   $('library').hidden = true; $('reader').hidden = false;
+  $('findInput').value = ''; $('findHits').replaceChildren(); // never carry one book's search into another
   $('title').textContent = info.book.Title;
   const pdfBook = info.book.Format === 'pdf';
   $('page').hidden = pdfBook; $('pdfWrap').hidden = !pdfBook; $('tocBtn').hidden = pdfBook; $('histBtn').hidden = false;

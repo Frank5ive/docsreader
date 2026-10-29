@@ -6,6 +6,7 @@ package pdf
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -80,13 +81,35 @@ func (d *doc) Blocks(i int) (out []string, err error) {
 	if p.V.IsNull() {
 		return nil, nil
 	}
-	txt, err := p.GetPlainText(nil)
-	if err != nil {
-		return nil, err
-	}
+	txt := pageText(p)
 	txt = strings.Join(strings.Fields(txt), " ")
 	if txt == "" {
 		return nil, nil
 	}
 	return []string{txt}, nil
+}
+
+// pageText rebuilds the text of a page from glyph positions. GetPlainText only
+// breaks lines on a few operators, so PDFs that position text with Td/Tm glue
+// the last word of a line to the first of the next ("pagelives"). Here a new
+// line or a gap wider than a fraction of the font size becomes a space.
+func pageText(p lpdf.Page) string {
+	var sb strings.Builder
+	var prev lpdf.Text
+	for i, g := range p.Content().Text {
+		if i > 0 {
+			size := math.Max(prev.FontSize, 1)
+			switch {
+			case math.Abs(g.Y-prev.Y) > size*0.5: // new line
+				sb.WriteByte(' ')
+			case prev.W > 0 && g.X-(prev.X+prev.W) > size*0.2: // word gap
+				sb.WriteByte(' ')
+			case prev.W <= 0 && g.X-prev.X > size: // width unknown: only a large jump counts
+				sb.WriteByte(' ')
+			}
+		}
+		sb.WriteString(g.S)
+		prev = g
+	}
+	return sb.String()
 }

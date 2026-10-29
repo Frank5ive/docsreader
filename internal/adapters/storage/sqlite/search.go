@@ -9,10 +9,11 @@ import (
 	"github.com/frank5ive/docsreader/internal/app"
 )
 
-// fts_v2 adds Porter stemming ("learning" finds "learn"). The old unstemmed
-// table is dropped; books are re-indexed on the next start (Library.EnsureIndexed).
+// fts_v3 adds Porter stemming ("learning" finds "learn"). The old unstemmed
+// tables are dropped (v3 also follows the corrected PDF line/word extraction); books are re-indexed on the next start (Library.EnsureIndexed).
 const ftsSchema = `DROP TABLE IF EXISTS fts;
-CREATE VIRTUAL TABLE IF NOT EXISTS fts_v2 USING fts5(
+DROP TABLE IF EXISTS fts_v2;
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_v3 USING fts5(
 	text, book_id UNINDEXED, section UNINDEXED, block UNINDEXED, tokenize='porter unicode61 remove_diacritics 2');`
 
 // Search returns the app.SearchIndex view of the store.
@@ -26,10 +27,10 @@ func (x searchIdx) Index(ctx context.Context, bookID string, blocks []app.Block)
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM fts_v2 WHERE book_id=?`, bookID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM fts_v3 WHERE book_id=?`, bookID); err != nil {
 		return err
 	}
-	st, err := tx.PrepareContext(ctx, `INSERT INTO fts_v2(text,book_id,section,block) VALUES(?,?,?,?)`)
+	st, err := tx.PrepareContext(ctx, `INSERT INTO fts_v3(text,book_id,section,block) VALUES(?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func (x searchIdx) Index(ctx context.Context, bookID string, blocks []app.Block)
 		}
 	}
 	// Marker row so books with no text (e.g. PDFs) are not re-indexed on every start.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fts_v2(text,book_id,section,block) VALUES('',?,-1,-1)`, bookID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fts_v3(text,book_id,section,block) VALUES('',?,-1,-1)`, bookID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -51,12 +52,12 @@ func (x searchIdx) Index(ctx context.Context, bookID string, blocks []app.Block)
 
 func (x searchIdx) Indexed(ctx context.Context, bookID string) (bool, error) {
 	var n int
-	err := x.s.db.QueryRowContext(ctx, `SELECT count(*) FROM fts_v2 WHERE book_id=? AND section=-1`, bookID).Scan(&n)
+	err := x.s.db.QueryRowContext(ctx, `SELECT count(*) FROM fts_v3 WHERE book_id=? AND section=-1`, bookID).Scan(&n)
 	return n > 0, err
 }
 
 func (x searchIdx) Remove(ctx context.Context, bookID string) error {
-	_, err := x.s.db.ExecContext(ctx, `DELETE FROM fts_v2 WHERE book_id=?`, bookID)
+	_, err := x.s.db.ExecContext(ctx, `DELETE FROM fts_v3 WHERE book_id=?`, bookID)
 	return err
 }
 
@@ -85,9 +86,9 @@ func (x searchIdx) Search(ctx context.Context, query, bookID string, limit int) 
 		return []app.Hit{}, nil
 	}
 	rows, err := x.s.db.QueryContext(ctx, `SELECT f.book_id, b.title, f.section, f.block,
-		snippet(fts_v2, 0, ?, ?, '…', 14)
-		FROM fts_v2 f JOIN books b ON b.id=f.book_id
-		WHERE fts_v2 MATCH ? AND f.section>=0 AND (?='' OR f.book_id=?)
+		snippet(fts_v3, 0, ?, ?, '…', 14)
+		FROM fts_v3 f JOIN books b ON b.id=f.book_id
+		WHERE fts_v3 MATCH ? AND f.section>=0 AND (?='' OR f.book_id=?)
 		ORDER BY rank LIMIT ?`, markOpen, markClose, m, bookID, bookID, limit)
 	if err != nil {
 		return nil, err
