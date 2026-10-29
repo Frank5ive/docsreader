@@ -213,12 +213,11 @@ function trackFocus() {
 let saveT = 0, dirty = false;
 function onScroll() {
   if (!cur || $('reader').hidden) return;
-  if (cur.book.Format === 'epub') {
-    const a = currentAnchor(); cur.anchor = a;
-    $('pct').textContent = Math.round(a.percent * 100) + '%';
-    $('seek').value = Math.round(a.percent * 1000);
-    trackFocus();
-  }
+  const a = currentAnchor(); cur.anchor = a;
+  $('pct').textContent = cur.book.Format === 'pdf'
+    ? `p.${cur.pdfPage + 1}/${cur.pdf.numPages}` : Math.round(a.percent * 100) + '%';
+  $('seek').value = Math.round(a.percent * 1000);
+  if (cur.book.Format === 'epub') trackFocus();
   dirty = true; clearTimeout(saveT); saveT = setTimeout(flush, 1000);
   activity();
 }
@@ -279,7 +278,7 @@ async function renderPdfPage(n, yFrac = 0) {
   c.style.width = vp.width / (devicePixelRatio || 1) + 'px';
   await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
   $('pdfWrap').replaceChildren(c);
-  window.scrollTo(0, yFrac * c.height / (devicePixelRatio || 1));
+  window.scrollTo(0, 60 + yFrac * c.height / (devicePixelRatio || 1)); // 60 = header offset, matches pdfAnchor
   onScroll();
 }
 function pdfAnchor() {
@@ -288,7 +287,7 @@ function pdfAnchor() {
   const y = Math.max(0, Math.min(1000, Math.round(((scrollY - 60) / h) * 1000)));
   return { section: cur.pdfPage, block: 0, offset: y, percent: (cur.pdfPage + y / 1000) / cur.pdf.numPages, quote: '' };
 }
-function goPdf(n) { renderPdfPage(n); }
+function goPdf(n) { renderPdfPage(n).then(() => { dirty = true; flush(); }); }
 
 /* ---------- reading time (idle-aware) ---------- */
 let lastAct = 0, active = 0, timer = 0;
