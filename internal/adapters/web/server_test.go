@@ -52,6 +52,7 @@ func newServer(t *testing.T, dir string) (*httptest.Server, *web.Server) {
 	lib := &app.Library{Books: st, Files: platform.FileStore{Dir: dir}, Readers: readers, Now: time.Now}
 	rd := &app.Reading{Books: st, Progress: st.Progress(), Sessions: st, Readers: readers, Now: time.Now}
 	lib.Index = st.Search()
+	t.Cleanup(func() { rd.Close() })
 	s := web.New(lib, rd, &app.Annotate{Books: st, Anns: st.Annotations(), Now: time.Now}, &app.Search{Index: st.Search()})
 	s.Backup = &app.Backup{DB: st, BooksDir: dir, TempDir: dir}
 	ts := httptest.NewServer(s.Handler())
@@ -258,6 +259,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	readers := map[domain.Format]app.FormatReader{domain.FormatEPUB: epub.Reader{}}
 	lib := &app.Library{Books: st, Files: platform.FileStore{Dir: filepath.Join(dir, "books")}, Readers: readers, Index: st.Search(), Now: time.Now}
 	rd := &app.Reading{Books: st, Progress: st.Progress(), Sessions: st, Readers: readers, Now: time.Now}
+	t.Cleanup(func() { rd.Close() })
 	srv := web.New(lib, rd, &app.Annotate{Books: st, Anns: st.Annotations(), Now: time.Now}, &app.Search{Index: st.Search()})
 	srv.Backup = &app.Backup{DB: st, BooksDir: filepath.Join(dir, "books"), TempDir: dir}
 	ts := httptest.NewServer(srv.Handler())

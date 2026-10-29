@@ -69,6 +69,21 @@ func (r *Reading) Document(ctx context.Context, id string) (Document, error) {
 	return d, nil
 }
 
+// Close releases every cached document. Windows cannot delete a file that is
+// still open, so callers close before removing the library folder.
+func (r *Reading) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var first error
+	for id, d := range r.docs {
+		if err := d.Close(); err != nil && first == nil {
+			first = err
+		}
+		delete(r.docs, id)
+	}
+	return first
+}
+
 // Heartbeat records reading time. seconds is capped by domain.MaxIdle so a
 // forgotten open tab does not inflate statistics.
 func (r *Reading) Heartbeat(ctx context.Context, id string, seconds, words int) error {
