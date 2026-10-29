@@ -84,8 +84,13 @@ func (l *Library) ImportReader(ctx context.Context, name string, content io.Read
 		return domain.Book{}, err
 	}
 	if l.Index != nil {
-		if err := IndexBook(ctx, l.Index, id, doc); err != nil {
+		words, err := IndexBook(ctx, l.Index, id, doc)
+		if err != nil {
 			return b, fmt.Errorf("imported, but indexing failed: %w", err)
+		}
+		if b.WordCount == 0 && words > 0 { // formats without a word count (PDF)
+			b.WordCount = words
+			_ = l.Books.Save(ctx, b)
 		}
 	}
 	return b, nil
@@ -145,10 +150,14 @@ func (l *Library) EnsureIndexed(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		err = IndexBook(ctx, l.Index, b.ID, doc)
+		words, err := IndexBook(ctx, l.Index, b.ID, doc)
 		doc.Close()
 		if err != nil {
 			return err
+		}
+		if b.WordCount == 0 && words > 0 {
+			b.WordCount = words
+			_ = l.Books.Save(ctx, b)
 		}
 	}
 	return nil

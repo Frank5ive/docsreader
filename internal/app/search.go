@@ -11,7 +11,7 @@ type Search struct {
 }
 
 // IndexBook extracts the text of every section of doc and stores it.
-func IndexBook(ctx context.Context, idx SearchIndex, bookID string, doc Document) error {
+func IndexBook(ctx context.Context, idx SearchIndex, bookID string, doc Document) (words int, err error) {
 	var blocks []Block
 	for s := 0; s < doc.Meta().Sections; s++ {
 		texts, err := doc.Blocks(s)
@@ -24,10 +24,11 @@ func IndexBook(ctx context.Context, idx SearchIndex, bookID string, doc Document
 		for i, t := range texts {
 			if strings.TrimSpace(t) != "" {
 				blocks = append(blocks, Block{Section: s, Index: i, Text: t})
+				words += len(strings.Fields(t))
 			}
 		}
 	}
-	return idx.Index(ctx, bookID, blocks)
+	return words, idx.Index(ctx, bookID, blocks)
 }
 
 // Find searches one book, or the whole library when bookID is empty.

@@ -12,7 +12,7 @@
   <span id="title">docsreader</span>
   <span id="spacer"></span>
   <button id="tocBtn" hidden title="Contents">TOC</button>
-  <button id="markBtn" hidden title="Bookmark this spot">&#128278;</button>
+  <button id="markBtn" hidden title="Bookmark this page or spot (B)">&#128278; Bookmark</button>
   <button id="notesBtn" hidden title="Highlights, notes and bookmarks">Notes</button>
   <button id="findBtn" hidden title="Search in book">Find</button>
   <button id="histBtn" hidden title="Reading history">History</button>
@@ -46,7 +46,12 @@
 <aside id="history" hidden></aside>
 <aside id="notes" hidden></aside>
 <aside id="find" hidden><input id="findInput" type="search" placeholder="Search this book…" autocomplete="off"><div id="findHits"></div></aside>
-<div id="selbar" hidden><button id="hlBtn">Highlight</button><button id="noteBtn">Note</button></div>
+<div id="selbar" hidden>
+  <div id="selBtns"><button id="hlBtn">Highlight</button> <button id="noteBtn">Add note</button></div>
+  <div id="noteForm" hidden><textarea id="noteText" rows="3" placeholder="Write a note… (Ctrl+Enter to save)"></textarea>
+    <div><button id="noteSave">Save</button> <button id="noteCancel">Cancel</button></div></div>
+</div>
+<div id="toast" hidden></div>
 <aside id="settings" hidden>
   <label>Theme
     <select id="theme"><option>light</option><option>sepia</option><option>dark</option></select></label>

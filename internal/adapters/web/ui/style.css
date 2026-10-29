@@ -31,7 +31,7 @@ main{padding:64px 1rem 1rem;max-width:1000px;margin:0 auto}
 #page.focus [data-b]{opacity:.28}
 #page.focus [data-b].cur{opacity:1}
 #pdfWrap{padding:60px 0 70px;display:flex;flex-direction:column;align-items:center;gap:8px}
-#pdfWrap canvas{max-width:100%;box-shadow:0 1px 6px #0004;background:#fff}
+
 #foot{position:fixed;bottom:0;left:0;right:0;display:flex;gap:.6rem;align-items:center;padding:.5rem 1rem;background:var(--bg);border-top:1px solid var(--line)}
 #seek{flex:1}
 aside{position:fixed;top:48px;right:0;bottom:0;width:min(340px,90vw);background:var(--card);border-left:1px solid var(--line);padding:1rem;overflow:auto;z-index:6}
@@ -51,4 +51,16 @@ aside select,aside input[type=range]{width:100%;margin-top:.2rem}
 .ann q{display:block;cursor:pointer;margin-bottom:.3rem}
 .ann textarea{width:100%;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.3rem}
 .ann .acts{display:flex;gap:.4rem;margin-top:.3rem}
-#selbar{position:fixed;z-index:8;display:flex;gap:.3rem;padding:.3rem;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px #0004}
+#selbar{position:fixed;z-index:8;gap:.3rem;padding:.3rem;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px #0004}
+
+#selbar textarea{width:240px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.3rem;display:block;margin-bottom:.3rem}
+#toast{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:.5rem .9rem;border-radius:8px;z-index:20;max-width:90vw;font-size:.9rem}
+#markBtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.pdfPage{position:relative;background:#fff;box-shadow:0 1px 6px #0004}
+.pdfPage canvas{display:block}
+.textLayer{position:absolute;inset:0;overflow:clip;line-height:1;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;z-index:1}
+.textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
+.textLayer .markedContent{display:contents}
+.textLayer ::selection{background:rgba(40,110,255,.35)}
+.textLayer mark.hl{color:transparent;mix-blend-mode:multiply;border-radius:0}
+.textLayer mark.hl.note{border-bottom:2px solid var(--accent)}

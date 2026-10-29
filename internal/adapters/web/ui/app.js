@@ -75,6 +75,7 @@ async function loadLibrary() {
   const shelf = $('shelf'); shelf.replaceChildren();
   for (const b of books) {
     const c = document.createElement('div'); c.className = 'card';
+    c.dataset.q = (b.Title + ' ' + b.Author).toLowerCase();
     const meta = document.createElement('div'); meta.className = 'meta';
     const t = document.createElement('b'); t.textContent = b.Title; t.title = b.Title;
     const a = document.createElement('span');
@@ -117,13 +118,14 @@ async function openBook(id, target) {
   cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: target || (info.hasProgress ? info.progress : null), section: 0, pdf: null, anns: [] };
   $('library').hidden = true; $('reader').hidden = false;
   $('title').textContent = info.book.Title;
-  const isPdf = info.book.Format === 'pdf';
-  $('page').hidden = isPdf; $('pdfWrap').hidden = !isPdf; $('tocBtn').hidden = isPdf; $('histBtn').hidden = false;
-  $('markBtn').hidden = $('notesBtn').hidden = false; $('findBtn').hidden = isPdf;
+  const pdfBook = info.book.Format === 'pdf';
+  $('page').hidden = pdfBook; $('pdfWrap').hidden = !pdfBook; $('tocBtn').hidden = pdfBook; $('histBtn').hidden = false;
+  $('markBtn').hidden = $('notesBtn').hidden = false; $('findBtn').hidden = false;
   await loadAnns();
   applyPrefs();
-  if (isPdf) await openPdf(); else { buildToc(); await loadSection(cur.anchor ? cur.anchor.section : 0, cur.anchor); }
+  if (pdfBook) await openPdf(); else { buildToc(); await loadSection(cur.anchor ? cur.anchor.section : 0, cur.anchor); }
   startTimer();
+  if (!localStorage.getItem('hintSeen')) { toast('Select text to highlight or add a note · press B to bookmark · Ctrl+F to search'); localStorage.setItem('hintSeen', '1'); }
 }
 function buildToc() {
   const t = $('toc'); t.replaceChildren();
@@ -223,6 +225,7 @@ function onScroll() {
     ? `p.${cur.pdfPage + 1}/${cur.pdf.numPages}` : Math.round(a.percent * 100) + '%';
   $('seek').value = Math.round(a.percent * 1000);
   if (cur.book.Format === 'epub') trackFocus();
+  updateMarkBtn();
   dirty = true; clearTimeout(saveT); saveT = setTimeout(flush, 1000);
   activity();
 }
@@ -261,33 +264,51 @@ addEventListener('keydown', (e) => {
   if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); step(1); }
   if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); step(-1); }
   if (e.key === 'Escape') showLibrary();
+  if (e.key === 'b') toggleBookmark();
 });
 
 /* ---------- PDF (rendered client-side by vendored pdf.js) ---------- */
 async function openPdf() {
   const pdfjs = await import('/vendor/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
+  cur.pdfjs = pdfjs;
   cur.pdf = await pdfjs.getDocument(`/api/books/${cur.id}/file`).promise;
   cur.book.Sections = cur.pdf.numPages;
   cur.pdfPage = cur.anchor ? cur.anchor.section : 0;
   await renderPdfPage(cur.pdfPage, cur.anchor ? cur.anchor.offset / 1000 : 0);
 }
-async function renderPdfPage(n, yFrac = 0) {
+async function renderPdfPage(n, yFrac = 0, block = null) {
   n = Math.max(0, Math.min(cur.pdf.numPages - 1, n));
   cur.pdfPage = n;
+  const seq = (cur.renderSeq = (cur.renderSeq || 0) + 1); // drop results of superseded renders
   const page = await cur.pdf.getPage(n + 1);
+  const dpr = devicePixelRatio || 1;
   const vp0 = page.getViewport({ scale: 1 });
-  const scale = Math.min(1.8, (Math.min(innerWidth, 900) - 24) / vp0.width) * (devicePixelRatio || 1);
-  const vp = page.getViewport({ scale });
-  const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
-  c.style.width = vp.width / (devicePixelRatio || 1) + 'px';
-  await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
-  $('pdfWrap').replaceChildren(c);
-  window.scrollTo(0, 60 + yFrac * c.height / (devicePixelRatio || 1)); // 60 = header offset, matches pdfAnchor
+  const cssScale = Math.min(1.8, (Math.min(innerWidth, 900) - 24) / vp0.width);
+  const vp = page.getViewport({ scale: cssScale });
+  const wrap = document.createElement('div'); wrap.className = 'pdfPage';
+  wrap.style.width = vp.width + 'px'; wrap.style.height = vp.height + 'px';
+  wrap.style.setProperty('--scale-factor', cssScale);
+  const c = document.createElement('canvas');
+  const hi = page.getViewport({ scale: cssScale * dpr });
+  c.width = hi.width; c.height = hi.height; c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px';
+  const tl = document.createElement('div'); tl.className = 'textLayer';
+  wrap.append(c, tl);
+  await page.render({ canvasContext: c.getContext('2d'), viewport: hi }).promise;
+  await new cur.pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
+  if (seq !== cur.renderSeq) return;
+  // Number the text spans in reading order so selections can be stored as (block, offset) like EPUB paragraphs.
+  let b = 0;
+  for (const sp of tl.querySelectorAll('span:not(.markedContent)')) if (sp.textContent) sp.dataset.b = b++;
+  $('pdfWrap').replaceChildren(wrap);
+  renderHighlights();
+  const target = block != null ? blockEl(block) : null;
+  const top = target ? target.getBoundingClientRect().top + scrollY - 90 : 60 + yFrac * vp.height;
+  window.scrollTo(0, top);
   onScroll();
 }
 function pdfAnchor() {
-  const c = $('pdfWrap').firstChild;
+  const c = $('pdfWrap').querySelector('.pdfPage');
   const h = c ? c.getBoundingClientRect().height : 1;
   const y = Math.max(0, Math.min(1000, Math.round(((scrollY - 60) / h) * 1000)));
   return { section: cur.pdfPage, block: 0, offset: y, percent: (cur.pdfPage + y / 1000) / cur.pdf.numPages, quote: '' };
@@ -320,10 +341,14 @@ loadLibrary();
 /* ---------- annotations: bookmarks, highlights, notes ---------- */
 async function loadAnns() {
   cur.anns = await api(`/api/books/${cur.id}/annotations`);
-  if (cur.book.Format === 'epub') renderHighlights();
+  renderHighlights();
+  updateMarkBtn();
   if (!$('notes').hidden) renderNotesPanel();
 }
-const blockEl = (n) => $('page').querySelector(`[data-b="${n}"]`);
+const isPdf = () => cur.book.Format === 'pdf';
+const root = () => (isPdf() ? $('pdfWrap') : $('page'));
+const sectionNow = () => (isPdf() ? cur.pdfPage : cur.section);
+const blockEl = (n) => root().querySelector(`[data-b="${n}"]`);
 
 // wrapRange wraps characters [from,to) of el's text in <mark> elements.
 function wrapRange(el, from, to, cls, id) {
@@ -341,11 +366,11 @@ function wrapRange(el, from, to, cls, id) {
   }
 }
 function renderHighlights() {
-  if (!cur || cur.book.Format !== 'epub') return;
-  for (const m of $('page').querySelectorAll('mark.hl')) m.replaceWith(...m.childNodes);
-  $('page').normalize();
+  if (!cur) return;
+  for (const m of root().querySelectorAll('mark.hl')) m.replaceWith(...m.childNodes);
+  root().normalize();
   for (const a of cur.anns || []) {
-    if (a.kind === 'bookmark' || a.start.section !== cur.section) continue;
+    if (a.kind === 'bookmark' || a.start.section !== sectionNow()) continue;
     const cls = `hl ${a.color || ''} ${a.kind === 'note' ? 'note' : ''}`;
     for (let b = a.start.block; b <= a.endBlock; b++) {
       const el = blockEl(b); if (!el) continue;
@@ -355,8 +380,8 @@ function renderHighlights() {
     }
   }
 }
-$('page').addEventListener('click', (e) => {
-  const m = e.target.closest('mark.hl'); if (!m) return;
+document.addEventListener('click', (e) => {
+  const m = e.target.closest('mark.hl'); if (!m || !cur || !getSelection().isCollapsed) return;
   if ($('notes').hidden) togglePanel('notes');
   renderNotesPanel(m.dataset.id);
 });
@@ -371,17 +396,21 @@ function pointOf(node, off) {
 let pendingSel = null;
 function checkSelection() {
   const sel = getSelection();
-  if (!cur || cur.book.Format !== 'epub' || !sel || sel.isCollapsed || !$('page').contains(sel.anchorNode)) { $('selbar').hidden = true; return; }
-  let a = pointOf(sel.anchorNode, sel.anchorOffset), b = pointOf(sel.focusNode, sel.focusOffset);
-  if (!a || !b) { $('selbar').hidden = true; return; }
+  if (!cur || !sel || sel.isCollapsed || sel.rangeCount === 0 || !root().contains(sel.anchorNode) || !root().contains(sel.focusNode)) { $('selbar').hidden = true; return; }
+  const range = sel.getRangeAt(0);
+  const spans = [...root().querySelectorAll('[data-b]')].filter((el) => range.intersectsNode(el));
+  if (!spans.length) { $('selbar').hidden = true; return; }
+  let a = pointOf(sel.anchorNode, sel.anchorOffset) || { block: +spans[0].dataset.b, offset: 0 };
+  let b = pointOf(sel.focusNode, sel.focusOffset) || { block: +spans.at(-1).dataset.b, offset: spans.at(-1).textContent.length };
   if (a.block > b.block || (a.block === b.block && a.offset > b.offset)) [a, b] = [b, a];
-  pendingSel = { a, b, quote: sel.toString().trim() };
-  const rect = sel.getRangeAt(0).getBoundingClientRect();
-  const bar = $('selbar'); bar.hidden = false;
-  bar.style.top = Math.max(56, rect.top - 46) + 'px';
-  bar.style.left = Math.min(innerWidth - 190, Math.max(8, rect.left)) + 'px';
+  if (a.block === b.block && a.offset === b.offset) { $('selbar').hidden = true; return; }
+  pendingSel = { a, b, quote: sel.toString().replace(/\s+/g, ' ').trim() };
+  const rect = range.getBoundingClientRect();
+  const bar = $('selbar'); bar.hidden = false; $('noteForm').hidden = true; $('selBtns').hidden = false;
+  bar.style.top = Math.max(56, rect.top - 52) + 'px';
+  bar.style.left = Math.min(innerWidth - 260, Math.max(8, rect.left)) + 'px';
 }
-document.addEventListener('mouseup', () => setTimeout(checkSelection, 0));
+document.addEventListener('mouseup', (e) => { if (!$('selbar').contains(e.target)) setTimeout(checkSelection, 0); });
 document.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow') || e.key === 'Shift') checkSelection(); });
 document.addEventListener('mousedown', (e) => { if (!$('selbar').contains(e.target)) $('selbar').hidden = true; });
 
@@ -389,26 +418,41 @@ async function addAnn(kind, extra = {}) {
   if (!pendingSel) return;
   const { a, b, quote } = pendingSel;
   const body = { kind, quote, color: 'yellow', endBlock: b.block, endOffset: b.offset, ...extra,
-    start: { section: cur.section, block: a.block, offset: a.offset, percent: currentAnchor().percent, quote } };
+    start: { section: sectionNow(), block: a.block, offset: a.offset, percent: currentAnchor().percent, quote } };
   await send(`/api/books/${cur.id}/annotations`, 'POST', body);
   pendingSel = null; getSelection().removeAllRanges(); $('selbar').hidden = true;
   await loadAnns();
 }
 $('hlBtn').onclick = () => addAnn('highlight');
-$('noteBtn').onclick = () => {
-  const text = prompt('Note');
-  if (text && text.trim()) addAnn('note', { note: text.trim() });
-};
-$('markBtn').onclick = async () => {
+$('noteBtn').onclick = () => { $('selBtns').hidden = true; $('noteForm').hidden = false; $('noteText').value = ''; $('noteText').focus(); };
+$('noteCancel').onclick = () => { $('selbar').hidden = true; };
+$('noteSave').onclick = () => { const t = $('noteText').value.trim(); if (t) addAnn('note', { note: t }); };
+$('noteText').onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('noteSave').click(); if (e.key === 'Escape') $('noteCancel').click(); };
+const bookmarkHere = () => {
   const a = currentAnchor();
-  await send(`/api/books/${cur.id}/annotations`, 'POST', { kind: 'bookmark', quote: a.quote || (cur.book.Format === 'pdf' ? `Page ${cur.pdfPage + 1}` : ''), start: a });
-  await loadAnns(); flash($('markBtn'));
+  return (cur.anns || []).find((x) => x.kind === 'bookmark' && x.start.section === a.section && (isPdf() || x.start.block === a.block));
 };
+function updateMarkBtn() { if (cur) $('markBtn').classList.toggle('on', !!bookmarkHere()); }
+async function toggleBookmark() {
+  if (!cur) return;
+  const have = bookmarkHere();
+  if (have) await api(`/api/books/${cur.id}/annotations/${have.id}`, { method: 'DELETE' });
+  else {
+    const a = currentAnchor();
+    await send(`/api/books/${cur.id}/annotations`, 'POST', { kind: 'bookmark', quote: a.quote || (isPdf() ? `Page ${a.section + 1}` : 'Bookmark'), start: a });
+  }
+  await loadAnns(); toast(have ? 'Bookmark removed' : 'Bookmarked');
+}
+$('markBtn').onclick = toggleBookmark;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2200);
+}
 function flash(el) { el.style.outline = '2px solid var(--accent)'; setTimeout(() => (el.style.outline = ''), 600); }
 
-function jumpTo(a) {
+function jumpTo(a, exact = false) {
   $('notes').hidden = true;
-  if (cur.book.Format === 'pdf') { cur.anchor = a; renderPdfPage(a.section, a.offset / 1000); return; }
+  if (isPdf()) { cur.anchor = a; renderPdfPage(a.section, a.offset / 1000, exact ? a.block : null); return; }
   cur.anchor = a;
   if (a.section === cur.section) restoreAnchor(a); else loadSection(a.section, a);
 }
@@ -421,7 +465,7 @@ function renderNotesPanel(focusId) {
   for (const a of cur.anns) {
     const d = document.createElement('div'); d.className = 'ann';
     const q = document.createElement('q');
-    q.textContent = (a.kind === 'bookmark' ? '🔖 ' : '') + (a.quote || 'Bookmark') ; q.onclick = () => jumpTo(a.start);
+    q.textContent = (a.kind === 'bookmark' ? '🔖 ' : '') + (a.quote || 'Bookmark') ; q.onclick = () => jumpTo(a.start, a.kind !== 'bookmark');
     const meta = document.createElement('small'); meta.textContent = `${Math.round(a.start.percent * 100)}% · ${a.kind}`;
     const ta = document.createElement('textarea'); ta.rows = 2; ta.placeholder = 'Add a note…'; ta.value = a.note || '';
     ta.hidden = a.kind === 'bookmark';
@@ -451,11 +495,16 @@ async function runSearch(q, book, into, showTitle, open) {
   for (const h of hits) { const el = hitEl(h, showTitle); el.onclick = () => open(h); into.append(el); }
 }
 const hitAnchor = (h) => ({ section: h.section, block: h.block, offset: 0, percent: 0, quote: '' });
-$('libSearch').oninput = debounce(() =>
+function filterShelf() {
+  const q = $('libSearch').value.trim().toLowerCase();
+  for (const c of $('shelf').children) c.hidden = !!q && !q.split(/\s+/).every((w) => c.dataset.q.includes(w));
+}
+$('libSearch').oninput = () => { filterShelf(); searchLibrary(); };
+const searchLibrary = debounce(() =>
   runSearch($('libSearch').value, '', $('libHits'), true, (h) => openBook(h.bookId, hitAnchor(h))), 200);
 $('findBtn').onclick = () => { if (togglePanel('find')) $('findInput').focus(); };
 $('findInput').oninput = debounce(() =>
   runSearch($('findInput').value, cur.id, $('findHits'), false, (h) => { $('find').hidden = true; jumpTo(hitAnchor(h)); }), 200);
 addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'f' && cur && cur.book.Format === 'epub') { e.preventDefault(); $('findBtn').click(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f' && cur && !$('reader').hidden) { e.preventDefault(); $('findBtn').click(); }
 });

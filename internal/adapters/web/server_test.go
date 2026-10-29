@@ -183,6 +183,11 @@ func TestAnnotationsAndSearch(t *testing.T) {
 	if len(hits) != 1 || hits[0].Block != 1 || !strings.Contains(hits[0].Snippet, "<mark>two</mark>") {
 		t.Fatalf("hits = %+v", hits)
 	}
+	hits = nil
+	json.NewDecoder(do("GET", "/api/search?q=twos", nil, "").Body).Decode(&hits)
+	if len(hits) != 1 {
+		t.Fatalf("stemmed query found %d hits", len(hits))
+	}
 	if r := do("GET", "/api/search?q="+url.QueryEscape(`"AND OR * ( NEAR`), nil, ""); r.StatusCode != 200 {
 		t.Fatalf("hostile query: %d", r.StatusCode)
 	}
