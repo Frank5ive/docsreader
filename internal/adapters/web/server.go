@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/books/{id}/annotations/{aid}", s.deleteNote)
 	mux.HandleFunc("GET /api/books/{id}/export.md", s.exportNotes)
 	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/stats/books", s.bookTimes)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	ui, _ := fs.Sub(uiFS, "ui")
 	mux.Handle("/", http.FileServerFS(ui))
@@ -387,4 +388,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, hits)
+}
+
+func (s *Server) bookTimes(w http.ResponseWriter, r *http.Request) {
+	t, err := s.Reading.BookTimes(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
 }

@@ -356,7 +356,7 @@ function wrapRange(el, from, to, cls, id) {
   const todo = []; let pos = 0, n;
   while ((n = w.nextNode())) {
     const len = n.length, s = Math.max(from, pos), e = Math.min(to, pos + len);
-    if (s < e) todo.push([n, s - pos, e - pos]);
+    if (s < e && !n.parentElement.closest(`mark.hl[data-id="${id}"]`)) todo.push([n, s - pos, e - pos]);
     pos += len;
   }
   for (const [node, s, e] of todo) {
@@ -385,17 +385,18 @@ document.addEventListener('click', (e) => {
   if (!m || !cur || !getSelection().isCollapsed) { if (!$('hlbar').contains(e.target)) $('hlbar').hidden = true; return; }
   // Clicking a highlight offers Remove / Notes right beside it.
   const bar = $('hlbar'), r = m.getBoundingClientRect();
-  bar.dataset.id = m.dataset.id; bar.hidden = false;
+  const ids = new Set(); for (let x = m; x; x = x.parentElement && x.parentElement.closest('mark.hl')) ids.add(x.dataset.id);
+  bar.dataset.ids = [...ids].join(','); bar.hidden = false;
   bar.style.top = Math.max(56, r.top - 46) + 'px';
   bar.style.left = Math.min(innerWidth - 230, Math.max(8, r.left)) + 'px';
 });
 $('hlRemove').onclick = async () => {
-  const id = $('hlbar').dataset.id; $('hlbar').hidden = true;
-  await api(`/api/books/${cur.id}/annotations/${id}`, { method: 'DELETE' });
-  await loadAnns(); toast('Highlight removed');
+  const ids = $('hlbar').dataset.ids.split(','); $('hlbar').hidden = true;
+  for (const id of ids) await api(`/api/books/${cur.id}/annotations/${id}`, { method: 'DELETE' });
+  await loadAnns(); toast(ids.length > 1 ? `${ids.length} highlights removed` : 'Highlight removed');
 };
 $('hlNotes').onclick = () => {
-  const id = $('hlbar').dataset.id; $('hlbar').hidden = true;
+  const id = $('hlbar').dataset.ids.split(',')[0]; $('hlbar').hidden = true;
   if ($('notes').hidden) togglePanel('notes');
   renderNotesPanel(id);
 };
@@ -431,6 +432,11 @@ document.addEventListener('mousedown', (e) => { if (!$('selbar').contains(e.targ
 async function addAnn(kind, extra = {}) {
   if (!pendingSel) return;
   const { a, b, quote } = pendingSel;
+  const sec = sectionNow();
+  const covered = (cur.anns || []).some((x) => x.kind !== 'bookmark' && x.start.section === sec &&
+    (x.start.block < a.block || (x.start.block === a.block && x.start.offset <= a.offset)) &&
+    (x.endBlock > b.block || (x.endBlock === b.block && x.endOffset >= b.offset)));
+  if (covered && kind === 'highlight') { getSelection().removeAllRanges(); $('selbar').hidden = true; toast('Already highlighted'); return; }
   const body = { kind, quote, color: 'yellow', endBlock: b.block, endOffset: b.offset, ...extra,
     start: { section: sectionNow(), block: a.block, offset: a.offset, percent: currentAnchor().percent, quote } };
   await send(`/api/books/${cur.id}/annotations`, 'POST', body);

@@ -35,6 +35,8 @@ type SessionRepository interface {
 	Stats(ctx context.Context, bookID string) (domain.Stats, error)
 	// Recent returns the newest sessions first; bookID "" means all books.
 	Recent(ctx context.Context, bookID string, limit int) ([]domain.Session, error)
+	// ByBook returns total reading time per book ID.
+	ByBook(ctx context.Context) (map[string]domain.BookTime, error)
 }
 
 // DocMeta is what a format reader learns about a file.

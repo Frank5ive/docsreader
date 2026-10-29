@@ -94,6 +94,11 @@ func (r *Reading) AllProgress(ctx context.Context) (map[string]domain.Progress, 
 	return r.Progress.All(ctx)
 }
 
+// BookTimes returns reading time per book.
+func (r *Reading) BookTimes(ctx context.Context) (map[string]domain.BookTime, error) {
+	return r.Sessions.ByBook(ctx)
+}
+
 // History returns the most recent reading sessions.
 func (r *Reading) History(ctx context.Context, id string, limit int) ([]domain.Session, error) {
 	return r.Sessions.Recent(ctx, id, limit)
