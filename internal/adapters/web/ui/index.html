@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>docsreader</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="light">
+<header id="bar">
+  <button id="home" title="Library">&#9776;</button>
+  <span id="title">docsreader</span>
+  <span id="spacer"></span>
+  <button id="tocBtn" hidden title="Contents">TOC</button>
+  <button id="setBtn" title="Display settings">Aa</button>
+</header>
+
+<main id="library">
+  <section id="continue"></section>
+  <div class="row">
+    <h2>Library</h2>
+    <label class="btn">Add books<input id="upload" type="file" accept=".epub,.pdf" multiple hidden></label>
+  </div>
+  <div id="shelf"></div>
+  <section id="stats"></section>
+</main>
+
+<main id="reader" hidden>
+  <article id="page"></article>
+  <div id="pdfWrap" hidden></div>
+  <footer id="foot">
+    <button id="prev">&larr;</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <span id="pct"></span>
+    <button id="next">&rarr;</button>
+  </footer>
+</main>
+
+<aside id="toc" hidden></aside>
+<aside id="settings" hidden>
+  <label>Theme
+    <select id="theme"><option>light</option><option>sepia</option><option>dark</option></select></label>
+  <label>Font
+    <select id="font"><option value="serif">Serif</option><option value="sans">Sans</option><option value="dyslexic">Readable</option></select></label>
+  <label>Size <input id="size" type="range" min="14" max="30" value="19"></label>
+  <label>Line height <input id="lh" type="range" min="12" max="22" value="17"></label>
+  <label>Width <input id="width" type="range" min="40" max="100" value="68"></label>
+  <label><input id="focus" type="checkbox"> Focus mode</label>
+</aside>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+// Package app contains the use cases and the ports they depend on.
+package app
+
+import (
+	"context"
+	"errors"
+	"io"
+	"time"
+
+	"github.com/frank5ive/docsreader/internal/domain"
+)
+
+var (
+	ErrNotFound    = errors.New("not found")
+	ErrUnsupported = errors.New("unsupported")
+)
+
+type BookRepository interface {
+	Save(ctx context.Context, b domain.Book) error
+	Get(ctx context.Context, id string) (domain.Book, error)
+	List(ctx context.Context) ([]domain.Book, error)
+	Touch(ctx context.Context, id string, at time.Time) error
+	Delete(ctx context.Context, id string) error
+}
+
+type ProgressRepository interface {
+	Save(ctx context.Context, p domain.Progress) error
+	Get(ctx context.Context, bookID string) (domain.Progress, error)
+	// All returns the latest progress of every book keyed by book ID.
+	All(ctx context.Context) (map[string]domain.Progress, error)
+}
+
+type SessionRepository interface {
+	Add(ctx context.Context, s domain.Session) error
+	Stats(ctx context.Context, bookID string) (domain.Stats, error)
+}
+
+// DocMeta is what a format reader learns about a file.
+type DocMeta struct {
+	Title, Author string
+	Sections      int
+	WordCount     int
+	HasCover      bool
+}
+
+// Document is an opened book file.
+type Document interface {
+	Meta() DocMeta
+	TOC() []domain.Chapter
+	// Section returns sanitised HTML for one reflowable section.
+	Section(i int) (string, error)
+	// Resource returns an embedded file such as an image or stylesheet.
+	Resource(name string) (data []byte, mime string, err error)
+	Cover() (data []byte, mime string, err error)
+	Close() error
+}
+
+// FormatReader opens files of one format.
+type FormatReader interface {
+	Format() domain.Format
+	Open(path string) (Document, error)
+}
+
+// FileStore keeps imported book files in a managed location.
+type FileStore interface {
+	Put(id string, ext string, r io.Reader) (path string, err error)
+	// Rename moves a stored file to its final id-based name.
+	Rename(path, id, ext string) (string, error)
+	Remove(path string) error
+}
