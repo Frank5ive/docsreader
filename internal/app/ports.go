@@ -33,6 +33,8 @@ type ProgressRepository interface {
 type SessionRepository interface {
 	Add(ctx context.Context, s domain.Session) error
 	Stats(ctx context.Context, bookID string) (domain.Stats, error)
+	// Recent returns the newest sessions first; bookID "" means all books.
+	Recent(ctx context.Context, bookID string, limit int) ([]domain.Session, error)
 }
 
 // DocMeta is what a format reader learns about a file.
@@ -47,6 +49,8 @@ type DocMeta struct {
 type Document interface {
 	Meta() DocMeta
 	TOC() []domain.Chapter
+	// SectionWords returns the word count of each section (nil if unknown).
+	SectionWords() []int
 	// Section returns sanitised HTML for one reflowable section.
 	Section(i int) (string, error)
 	// Resource returns an embedded file such as an image or stylesheet.

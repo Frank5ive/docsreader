@@ -52,3 +52,23 @@ func streak(perDay map[string]int, now time.Time) int {
 	}
 	return n
 }
+
+func (s *Store) Recent(ctx context.Context, bookID string, limit int) ([]domain.Session, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, book_id, start, seconds, words FROM sessions WHERE (?1='' OR book_id=?1) ORDER BY start DESC LIMIT ?2`, bookID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Session
+	for rows.Next() {
+		var x domain.Session
+		var start int64
+		if err := rows.Scan(&x.ID, &x.BookID, &start, &x.Seconds, &x.Words); err != nil {
+			return nil, err
+		}
+		x.Start = fromTS(start)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}

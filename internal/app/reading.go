@@ -81,7 +81,7 @@ func (r *Reading) Heartbeat(ctx context.Context, id string, seconds, words int) 
 	if words < 0 {
 		words = 0
 	}
-	return r.Sessions.Add(ctx, domain.Session{BookID: id, Start: r.Now(), Seconds: seconds, Words: words})
+	return r.Sessions.Add(ctx, domain.Session{BookID: id, Start: r.Now().Add(-time.Duration(seconds) * time.Second), Seconds: seconds, Words: words})
 }
 
 // Stats returns reading statistics for one book, or all books when id is empty.
@@ -92,4 +92,9 @@ func (r *Reading) Stats(ctx context.Context, id string) (domain.Stats, error) {
 // AllProgress returns the saved position of every book keyed by book ID.
 func (r *Reading) AllProgress(ctx context.Context) (map[string]domain.Progress, error) {
 	return r.Progress.All(ctx)
+}
+
+// History returns the most recent reading sessions.
+func (r *Reading) History(ctx context.Context, id string, limit int) ([]domain.Session, error) {
+	return r.Sessions.Recent(ctx, id, limit)
 }

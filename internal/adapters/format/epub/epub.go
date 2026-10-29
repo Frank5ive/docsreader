@@ -48,6 +48,7 @@ type doc struct {
 	coverID  string
 	toc      []domain.Chapter
 	words    int
+	secWords []int
 }
 
 type item struct {
@@ -166,12 +167,14 @@ func resolve(base, href string) string {
 }
 
 func (d *doc) countWords() {
+	d.secWords = make([]int, len(d.spine))
 	for i := range d.spine {
 		h, err := d.Section(i)
 		if err != nil {
 			continue
 		}
-		d.words += len(strings.FieldsFunc(stripTags(h), unicode.IsSpace))
+		d.secWords[i] = len(strings.FieldsFunc(stripTags(h), unicode.IsSpace))
+		d.words += d.secWords[i]
 	}
 }
 
@@ -180,6 +183,8 @@ func (d *doc) Meta() app.DocMeta {
 }
 
 func (d *doc) TOC() []domain.Chapter { return d.toc }
+
+func (d *doc) SectionWords() []int { return d.secWords }
 
 func (d *doc) Close() error { return d.zr.Close() }
 

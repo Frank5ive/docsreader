@@ -119,6 +119,16 @@ func TestResumeAcrossRestart(t *testing.T) {
 		t.Fatalf("progress after restart = %+v", got)
 	}
 
+	if r := client(ts2, s2)("POST", "/api/books/"+b.ID+"/heartbeat", []byte(`{"Seconds":60,"Words":300}`), "application/json"); r.StatusCode != 204 {
+		t.Fatalf("heartbeat: %d", r.StatusCode)
+	}
+	var hist []domain.Session
+	hr := client(ts2, s2)("GET", "/api/books/"+b.ID+"/history", nil, "")
+	json.NewDecoder(hr.Body).Decode(&hist)
+	if len(hist) != 1 || hist[0].Seconds != 60 || hist[0].Words != 300 {
+		t.Fatalf("history = %+v", hist)
+	}
+
 	sec := client(ts2, s2)("GET", "/api/books/"+b.ID+"/section/0", nil, "")
 	var sj map[string]string
 	json.NewDecoder(sec.Body).Decode(&sj)

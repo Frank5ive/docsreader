@@ -27,8 +27,22 @@ for (const k of ['theme', 'font', 'size', 'lh', 'width']) {
   $(k).oninput = () => { prefs[k] = $(k).type === 'range' ? +$(k).value : $(k).value; applyPrefs(); restore(); };
 }
 $('focus').onchange = () => { prefs.focus = $('focus').checked; applyPrefs(); trackFocus(); };
-$('setBtn').onclick = () => { $('toc').hidden = true; $('settings').hidden = !$('settings').hidden; };
-$('tocBtn').onclick = () => { $('settings').hidden = true; $('toc').hidden = !$('toc').hidden; };
+$('histBtn').onclick = async () => {
+  const h = $('history');
+  if (!h.hidden) { h.hidden = true; return; }
+  $('toc').hidden = $('settings').hidden = true;
+  const rows = await api(`/api/books/${cur.id}/history`);
+  h.replaceChildren(Object.assign(document.createElement('h3'), { textContent: 'Reading history' }));
+  if (!rows.length) h.append('No sessions yet.');
+  for (const s of rows) {
+    const d = document.createElement('div');
+    d.textContent = `${new Date(s.start).toLocaleString()} — ${Math.max(1, Math.round(s.seconds / 60))} min, ${s.words} words`;
+    h.append(d);
+  }
+  h.hidden = false;
+};
+$('setBtn').onclick = () => { $('toc').hidden = $('history').hidden = true; $('settings').hidden = !$('settings').hidden; };
+$('tocBtn').onclick = () => { $('settings').hidden = $('history').hidden = true; $('toc').hidden = !$('toc').hidden; };
 
 /* ---------- library ---------- */
 let cur = null; // current reading state
@@ -42,6 +56,13 @@ $('upload').onchange = async (e) => {
 };
 
 const pct = (b) => (b.progress ? Math.round(b.progress.percent * 100) : 0);
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  return Math.floor(s / 86400) + ' d ago';
+}
 function coverEl(b) {
   const d = document.createElement('div'); d.className = 'cover';
   if (b.HasCover) { const i = new Image(); i.src = `/api/books/${b.ID}/cover`; i.alt = ''; d.replaceChildren(i); }
@@ -55,7 +76,8 @@ async function loadLibrary() {
     const c = document.createElement('div'); c.className = 'card';
     const meta = document.createElement('div'); meta.className = 'meta';
     const t = document.createElement('b'); t.textContent = b.Title; t.title = b.Title;
-    const a = document.createElement('span'); a.textContent = b.Author || b.Format.toUpperCase();
+    const a = document.createElement('span');
+    a.textContent = b.lastRead ? `${pct(b)}% · ${ago(b.lastRead)}` : (b.Author || b.Format.toUpperCase());
     meta.append(t, a);
     const bar = document.createElement('div'); bar.className = 'bar';
     const fill = document.createElement('i'); fill.style.width = pct(b) + '%'; bar.append(fill);
@@ -72,7 +94,7 @@ async function loadLibrary() {
     const info = document.createElement('div');
     info.innerHTML = '<small>Continue reading</small><h3 style="margin:.2rem 0"></h3><span></span>';
     info.querySelector('h3').textContent = last.Title;
-    info.querySelector('span').textContent = pct(last) + '% read';
+    info.querySelector('span').textContent = `${pct(last)}% read · ${ago(last.lastRead)}`;
     h.append(coverEl(last), info); h.onclick = () => openBook(last.ID); cont.append(h);
   }
   const st = await api('/api/stats');
@@ -80,21 +102,21 @@ async function loadLibrary() {
     ? `Read ${Math.round(st.totalSeconds / 60)} min total · ${Math.round(st.wordsPerMin)} words/min · ${st.streakDays}-day streak`
     : 'Your reading stats will appear here.';
 }
-function showLibrary() {
-  flush(); stopTimer(); cur = null;
-  $('library').hidden = false; $('reader').hidden = true; $('toc').hidden = $('settings').hidden = true;
-  $('tocBtn').hidden = true; $('title').textContent = 'docsreader';
+async function showLibrary() {
+  clearTimeout(saveT); await flush(); stopTimer(); cur = null;
+  $('library').hidden = false; $('reader').hidden = true; $('toc').hidden = $('settings').hidden = $('history').hidden = true;
+  $('tocBtn').hidden = $('histBtn').hidden = true; $('title').textContent = 'docsreader';
   loadLibrary();
 }
 
 /* ---------- reader ---------- */
 async function openBook(id) {
   const info = await api('/api/books/' + id);
-  cur = { id, book: info.book, toc: info.toc, anchor: info.hasProgress ? info.progress : null, section: 0, pdf: null };
+  cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: info.hasProgress ? info.progress : null, section: 0, pdf: null };
   $('library').hidden = true; $('reader').hidden = false;
   $('title').textContent = info.book.Title;
   const isPdf = info.book.Format === 'pdf';
-  $('page').hidden = isPdf; $('pdfWrap').hidden = !isPdf; $('tocBtn').hidden = isPdf;
+  $('page').hidden = isPdf; $('pdfWrap').hidden = !isPdf; $('tocBtn').hidden = isPdf; $('histBtn').hidden = false;
   applyPrefs();
   if (isPdf) await openPdf(); else { buildToc(); await loadSection(cur.anchor ? cur.anchor.section : 0, cur.anchor); }
   startTimer();
@@ -127,22 +149,58 @@ function fixLinks() {
 const blocks = () => $('page').querySelectorAll('[data-b]');
 function restoreAnchor(a) {
   const el = $('page').querySelector(`[data-b="${a.block}"]`);
-  if (el) { window.scrollTo(0, el.getBoundingClientRect().top + scrollY - 80); }
+  if (el) {
+    const r = rangeAt(el, a.offset);
+    const top = (r ? r.getBoundingClientRect() : el.getBoundingClientRect()).top;
+    window.scrollTo(0, top + scrollY - 90);
+  }
+  const keep = cur.anchor; // scrolling must not overwrite the position we just restored
   onScroll();
+  if (keep) cur.anchor = { ...keep };
 }
-function restore() { if (cur && cur.book.Format === 'epub') restoreAnchor(currentAnchor()); }
+function restore() { if (cur && cur.book.Format === 'epub' && cur.anchor && cur.anchor.section === cur.section) restoreAnchor(cur.anchor); }
 
+// rangeAt returns a collapsed Range at the given character offset inside el.
+function rangeAt(el, offset) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let n, left = offset, last = null;
+  while ((n = w.nextNode())) {
+    last = n;
+    if (left <= n.length) { const r = document.createRange(); r.setStart(n, left); r.collapse(true); return r; }
+    left -= n.length;
+  }
+  if (!last) return null;
+  const r = document.createRange(); r.setStart(last, last.length); r.collapse(true); return r;
+}
+// offsetIn returns the character offset of the first visible character of el.
+function offsetIn(el) {
+  const top = 90;
+  const caret = document.caretRangeFromPoint
+    ? document.caretRangeFromPoint(innerWidth / 2, top + 4)
+    : (() => { const p = document.caretPositionFromPoint(innerWidth / 2, top + 4); if (!p) return null; const r = document.createRange(); r.setStart(p.offsetNode, p.offset); return r; })();
+  if (!caret || !el.contains(caret.startContainer)) return 0;
+  const pre = document.createRange(); pre.selectNodeContents(el); pre.setEnd(caret.startContainer, caret.startOffset);
+  return pre.toString().length;
+}
+// Percent weights each section by its word count so it tracks real progress.
+function percentOf(section, frac) {
+  const w = cur.sectionWords;
+  if (!w || !w.length) return Math.min(1, (section + frac) / cur.book.Sections);
+  const total = w.reduce((a, b) => a + b, 0) || 1;
+  let before = 0; for (let i = 0; i < section; i++) before += w[i];
+  return Math.min(1, (before + frac * w[section]) / total);
+}
 function currentAnchor() {
   if (cur.book.Format === 'pdf') return pdfAnchor();
   let block = 0, offset = 0, quote = '';
   for (const el of blocks()) {
     if (el.getBoundingClientRect().bottom > 90) {
-      block = +el.dataset.b; quote = el.textContent.trim().slice(0, 80); break;
+      block = +el.dataset.b; offset = offsetIn(el);
+      quote = el.textContent.slice(offset, offset + 80).trim(); break;
     }
   }
   const frac = Math.min(1, scrollY / Math.max(1, document.documentElement.scrollHeight - innerHeight));
-  const percent = Math.min(1, (cur.section + frac) / cur.book.Sections);
-  return { section: cur.section, block, offset, percent, quote };
+  return { section: cur.section, block, offset, percent: percentOf(cur.section, frac), quote };
 }
 function trackFocus() {
   if (!prefs.focus) return;
@@ -164,13 +222,14 @@ function onScroll() {
   dirty = true; clearTimeout(saveT); saveT = setTimeout(flush, 1000);
   activity();
 }
+// flush saves the position. keepalive lets the request outlive the page, and
+// the returned promise lets callers wait for it (e.g. before reloading the library).
 function flush() {
-  if (!cur || !dirty || !cur.anchor) return;
+  if (!cur || !dirty || !cur.anchor) return Promise.resolve();
   dirty = false;
-  const body = JSON.stringify(cur.anchor);
-  // sendBeacon survives page unload; plain fetch otherwise.
-  if (!(navigator.sendBeacon && navigator.sendBeacon(`/api/books/${cur.id}/progress`, new Blob([body], { type: 'application/json' }))))
-    send(`/api/books/${cur.id}/progress`, 'PUT', cur.anchor).catch(() => {});
+  return fetch(`/api/books/${cur.id}/progress`, {
+    method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cur.anchor),
+  }).catch(() => { dirty = true; });
 }
 addEventListener('scroll', onScroll, { passive: true });
 addEventListener('visibilitychange', () => { if (document.hidden) { flush(); beat(); } });

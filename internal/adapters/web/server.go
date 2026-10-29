@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/frank5ive/docsreader/internal/app"
 	"github.com/frank5ive/docsreader/internal/domain"
@@ -54,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/books/{id}/progress", s.saveProgress)
 	mux.HandleFunc("POST /api/books/{id}/progress", s.saveProgress) // sendBeacon
 	mux.HandleFunc("POST /api/books/{id}/heartbeat", s.heartbeat)
+	mux.HandleFunc("GET /api/books/{id}/history", s.history)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	ui, _ := fs.Sub(uiFS, "ui")
 	mux.Handle("/", http.FileServerFS(ui))
@@ -114,6 +116,7 @@ func fail(w http.ResponseWriter, err error) {
 type bookDTO struct {
 	domain.Book
 	Progress *domain.Anchor `json:"progress,omitempty"`
+	LastRead *time.Time     `json:"lastRead,omitempty"`
 }
 
 func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +136,8 @@ func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
 		if p, ok := prog[b.ID]; ok {
 			a := p.Anchor
 			dto.Progress = &a
+			t := p.UpdatedAt
+			dto.LastRead = &t
 		}
 		out = append(out, dto)
 	}
@@ -166,7 +171,7 @@ func (s *Server) getBook(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"book": b, "progress": p.Anchor, "hasProgress": !p.UpdatedAt.IsZero(), "toc": doc.TOC()})
+	writeJSON(w, http.StatusOK, map[string]any{"book": b, "progress": p.Anchor, "hasProgress": !p.UpdatedAt.IsZero(), "updatedAt": p.UpdatedAt, "toc": doc.TOC(), "sectionWords": doc.SectionWords()})
 }
 
 func (s *Server) deleteBook(w http.ResponseWriter, r *http.Request) {
@@ -284,4 +289,16 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	h, err := s.Reading.History(r.Context(), r.PathValue("id"), 50)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h == nil {
+		h = []domain.Session{}
+	}
+	writeJSON(w, http.StatusOK, h)
 }
