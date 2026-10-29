@@ -12,12 +12,17 @@
   <span id="title">docsreader</span>
   <span id="spacer"></span>
   <button id="tocBtn" hidden title="Contents">TOC</button>
+  <button id="markBtn" hidden title="Bookmark this spot">&#128278;</button>
+  <button id="notesBtn" hidden title="Highlights, notes and bookmarks">Notes</button>
+  <button id="findBtn" hidden title="Search in book">Find</button>
   <button id="histBtn" hidden title="Reading history">History</button>
   <button id="setBtn" title="Display settings">Aa</button>
 </header>
 
 <main id="library">
   <section id="continue"></section>
+  <input id="libSearch" type="search" placeholder="Search all your books…" autocomplete="off">
+  <div id="libHits"></div>
   <div class="row">
     <h2>Library</h2>
     <label class="btn">Add books<input id="upload" type="file" accept=".epub,.pdf" multiple hidden></label>
@@ -39,6 +44,9 @@
 
 <aside id="toc" hidden></aside>
 <aside id="history" hidden></aside>
+<aside id="notes" hidden></aside>
+<aside id="find" hidden><input id="findInput" type="search" placeholder="Search this book…" autocomplete="off"><div id="findHits"></div></aside>
+<div id="selbar" hidden><button id="hlBtn">Highlight</button><button id="noteBtn">Note</button></div>
 <aside id="settings" hidden>
   <label>Theme
     <select id="theme"><option>light</option><option>sepia</option><option>dark</option></select></label>

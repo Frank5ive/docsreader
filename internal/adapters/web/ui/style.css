@@ -40,3 +40,15 @@ aside select,aside input[type=range]{width:100%;margin-top:.2rem}
 #toc a{display:block;padding:.3rem 0;color:var(--fg);text-decoration:none;cursor:pointer}
 #toc a:hover{color:var(--accent)}
 [hidden]{display:none!important}
+
+#libSearch,#findInput{width:100%;padding:.55rem .8rem;margin:.5rem 0;font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px}
+.hit{display:block;padding:.5rem .2rem;border-bottom:1px solid var(--line);cursor:pointer;font-size:.9rem}
+.hit small{color:var(--muted);display:block}
+.hit mark,.hl{background:#ffe066;color:#1c1c1e;border-radius:2px}
+.hl.green{background:#9be6a8}.hl.blue{background:#a8d1ff}.hl.pink{background:#ffb3d1}
+.hl.note{border-bottom:2px solid var(--accent)}
+.ann{padding:.6rem 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.ann q{display:block;cursor:pointer;margin-bottom:.3rem}
+.ann textarea{width:100%;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.3rem}
+.ann .acts{display:flex;gap:.4rem;margin-top:.3rem}
+#selbar{position:fixed;z-index:8;display:flex;gap:.3rem;padding:.3rem;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px #0004}

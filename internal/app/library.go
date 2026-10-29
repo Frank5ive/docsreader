@@ -20,6 +20,7 @@ type Library struct {
 	Books   BookRepository
 	Files   FileStore
 	Readers map[domain.Format]FormatReader
+	Index   SearchIndex // optional
 	Now     func() time.Time
 }
 
@@ -82,6 +83,11 @@ func (l *Library) ImportReader(ctx context.Context, name string, content io.Read
 		_ = l.Files.Remove(path)
 		return domain.Book{}, err
 	}
+	if l.Index != nil {
+		if err := IndexBook(ctx, l.Index, id, doc); err != nil {
+			return b, fmt.Errorf("imported, but indexing failed: %w", err)
+		}
+	}
 	return b, nil
 }
 
@@ -94,6 +100,9 @@ func (l *Library) Delete(ctx context.Context, id string) error {
 	}
 	if err := l.Books.Delete(ctx, id); err != nil {
 		return err
+	}
+	if l.Index != nil {
+		_ = l.Index.Remove(ctx, id)
 	}
 	return l.Files.Remove(b.Path)
 }
@@ -112,4 +121,35 @@ func randBytes() []byte {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return b
+}
+
+// EnsureIndexed indexes books that have no search index yet (e.g. imported
+// before search existed).
+func (l *Library) EnsureIndexed(ctx context.Context) error {
+	if l.Index == nil {
+		return nil
+	}
+	books, err := l.Books.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, b := range books {
+		if ok, err := l.Index.Indexed(ctx, b.ID); err != nil || ok {
+			continue
+		}
+		rd, ok := l.Readers[b.Format]
+		if !ok {
+			continue
+		}
+		doc, err := rd.Open(b.Path)
+		if err != nil {
+			continue
+		}
+		err = IndexBook(ctx, l.Index, b.ID, doc)
+		doc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

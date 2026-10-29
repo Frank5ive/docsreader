@@ -28,14 +28,16 @@ const cookieName = "dr_token"
 type Server struct {
 	Library *app.Library
 	Reading *app.Reading
+	Notes   *app.Annotate
+	Search  *app.Search
 	token   string
 }
 
 // New creates a Server with a fresh random access token.
-func New(l *app.Library, r *app.Reading) *Server {
+func New(l *app.Library, r *app.Reading, n *app.Annotate, q *app.Search) *Server {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
-	return &Server{Library: l, Reading: r, token: hex.EncodeToString(b)}
+	return &Server{Library: l, Reading: r, Notes: n, Search: q, token: hex.EncodeToString(b)}
 }
 
 // Token is the per-run secret that must accompany the first request.
@@ -56,6 +58,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/books/{id}/progress", s.saveProgress) // sendBeacon
 	mux.HandleFunc("POST /api/books/{id}/heartbeat", s.heartbeat)
 	mux.HandleFunc("GET /api/books/{id}/history", s.history)
+	mux.HandleFunc("GET /api/books/{id}/annotations", s.listNotes)
+	mux.HandleFunc("POST /api/books/{id}/annotations", s.addNote)
+	mux.HandleFunc("PATCH /api/books/{id}/annotations/{aid}", s.editNote)
+	mux.HandleFunc("DELETE /api/books/{id}/annotations/{aid}", s.deleteNote)
+	mux.HandleFunc("GET /api/books/{id}/export.md", s.exportNotes)
+	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	ui, _ := fs.Sub(uiFS, "ui")
 	mux.Handle("/", http.FileServerFS(ui))
@@ -301,4 +309,82 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		h = []domain.Session{}
 	}
 	writeJSON(w, http.StatusOK, h)
+}
+
+func badRequest(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+}
+
+func (s *Server) listNotes(w http.ResponseWriter, r *http.Request) {
+	l, err := s.Notes.List(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
+func (s *Server) addNote(w http.ResponseWriter, r *http.Request) {
+	var a domain.Annotation
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<17)).Decode(&a); err != nil {
+		badRequest(w, "bad annotation")
+		return
+	}
+	a.BookID = r.PathValue("id")
+	out, err := s.Notes.Add(r.Context(), a)
+	switch {
+	case errors.Is(err, app.ErrNotFound):
+		fail(w, err)
+	case err != nil:
+		badRequest(w, err.Error())
+	default:
+		writeJSON(w, http.StatusCreated, out)
+	}
+}
+
+func (s *Server) editNote(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("aid"), 10, 64)
+	var in struct{ Note string }
+	if err != nil || json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<17)).Decode(&in) != nil {
+		badRequest(w, "bad request")
+		return
+	}
+	if err := s.Notes.UpdateNote(r.Context(), r.PathValue("id"), id, in.Note); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteNote(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("aid"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.Notes.Delete(r.Context(), r.PathValue("id"), id); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) exportNotes(w http.ResponseWriter, r *http.Request) {
+	md, err := s.Notes.ExportMarkdown(r.Context(), r.PathValue("id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="notes.md"`)
+	_, _ = w.Write([]byte(md))
+}
+
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	hits, err := s.Search.Find(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("book"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, hits)
 }

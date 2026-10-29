@@ -36,6 +36,7 @@ type doc struct{ meta app.DocMeta }
 func (d *doc) Meta() app.DocMeta                       { return d.meta }
 func (d *doc) TOC() []domain.Chapter                   { return nil }
 func (d *doc) SectionWords() []int                     { return nil }
+func (d *doc) Blocks(int) ([]string, error)            { return nil, nil }
 func (d *doc) Section(int) (string, error)             { return "", app.ErrUnsupported }
 func (d *doc) Resource(string) ([]byte, string, error) { return nil, "", app.ErrUnsupported }
 func (d *doc) Cover() ([]byte, string, error)          { return nil, "", app.ErrNotFound }

@@ -29,8 +29,7 @@ for (const k of ['theme', 'font', 'size', 'lh', 'width']) {
 $('focus').onchange = () => { prefs.focus = $('focus').checked; applyPrefs(); trackFocus(); };
 $('histBtn').onclick = async () => {
   const h = $('history');
-  if (!h.hidden) { h.hidden = true; return; }
-  $('toc').hidden = $('settings').hidden = true;
+  if (!togglePanel('history')) return;
   const rows = await api(`/api/books/${cur.id}/history`);
   h.replaceChildren(Object.assign(document.createElement('h3'), { textContent: 'Reading history' }));
   if (!rows.length) h.append('No sessions yet.');
@@ -39,10 +38,12 @@ $('histBtn').onclick = async () => {
     d.textContent = `${new Date(s.start).toLocaleString()} — ${Math.max(1, Math.round(s.seconds / 60))} min, ${s.words} words`;
     h.append(d);
   }
-  h.hidden = false;
 };
-$('setBtn').onclick = () => { $('toc').hidden = $('history').hidden = true; $('settings').hidden = !$('settings').hidden; };
-$('tocBtn').onclick = () => { $('settings').hidden = $('history').hidden = true; $('toc').hidden = !$('toc').hidden; };
+const panels = ['toc', 'settings', 'history', 'notes', 'find'];
+function togglePanel(id) { const open = $(id).hidden; for (const p of panels) $(p).hidden = true; $(id).hidden = !open; return open; }
+$('setBtn').onclick = ()=>togglePanel('settings');
+
+$('tocBtn').onclick = () => togglePanel('toc');
 
 /* ---------- library ---------- */
 let cur = null; // current reading state
@@ -104,19 +105,22 @@ async function loadLibrary() {
 }
 async function showLibrary() {
   clearTimeout(saveT); await flush(); stopTimer(); cur = null;
-  $('library').hidden = false; $('reader').hidden = true; $('toc').hidden = $('settings').hidden = $('history').hidden = true;
-  $('tocBtn').hidden = $('histBtn').hidden = true; $('title').textContent = 'docsreader';
+  $('library').hidden = false; $('reader').hidden = true; for (const p of panels) $(p).hidden = true;
+  $('selbar').hidden = true;
+  for (const b of ['tocBtn', 'histBtn', 'markBtn', 'notesBtn', 'findBtn']) $(b).hidden = true; $('title').textContent = 'docsreader';
   loadLibrary();
 }
 
 /* ---------- reader ---------- */
-async function openBook(id) {
+async function openBook(id, target) {
   const info = await api('/api/books/' + id);
-  cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: info.hasProgress ? info.progress : null, section: 0, pdf: null };
+  cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: target || (info.hasProgress ? info.progress : null), section: 0, pdf: null, anns: [] };
   $('library').hidden = true; $('reader').hidden = false;
   $('title').textContent = info.book.Title;
   const isPdf = info.book.Format === 'pdf';
   $('page').hidden = isPdf; $('pdfWrap').hidden = !isPdf; $('tocBtn').hidden = isPdf; $('histBtn').hidden = false;
+  $('markBtn').hidden = $('notesBtn').hidden = false; $('findBtn').hidden = isPdf;
+  await loadAnns();
   applyPrefs();
   if (isPdf) await openPdf(); else { buildToc(); await loadSection(cur.anchor ? cur.anchor.section : 0, cur.anchor); }
   startTimer();
@@ -135,6 +139,7 @@ async function loadSection(n, anchor) {
   cur.section = n;
   $('page').innerHTML = html;
   fixLinks();
+  renderHighlights();
   window.scrollTo(0, 0);
   if (anchor && anchor.section === n) restoreAnchor(anchor); else onScroll();
   cur.anchor = cur.anchor || null;
@@ -154,7 +159,7 @@ function restoreAnchor(a) {
     const top = (r ? r.getBoundingClientRect() : el.getBoundingClientRect()).top;
     window.scrollTo(0, top + scrollY - 90);
   }
-  const keep = cur.anchor; // scrolling must not overwrite the position we just restored
+  const keep = a.percent > 0 ? cur.anchor : null; // keep a saved position exact; a jump target (no percent) is re-derived
   onScroll();
   if (keep) cur.anchor = { ...keep };
 }
@@ -252,7 +257,7 @@ function seekTo(p) {
   loadSection(n, null);
 }
 addEventListener('keydown', (e) => {
-  if ($('reader').hidden || /INPUT|SELECT/.test(e.target.tagName)) return;
+  if ($('reader').hidden || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); step(1); }
   if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); step(-1); }
   if (e.key === 'Escape') showLibrary();
@@ -311,3 +316,146 @@ function beat() {
 
 applyPrefs();
 loadLibrary();
+
+/* ---------- annotations: bookmarks, highlights, notes ---------- */
+async function loadAnns() {
+  cur.anns = await api(`/api/books/${cur.id}/annotations`);
+  if (cur.book.Format === 'epub') renderHighlights();
+  if (!$('notes').hidden) renderNotesPanel();
+}
+const blockEl = (n) => $('page').querySelector(`[data-b="${n}"]`);
+
+// wrapRange wraps characters [from,to) of el's text in <mark> elements.
+function wrapRange(el, from, to, cls, id) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const todo = []; let pos = 0, n;
+  while ((n = w.nextNode())) {
+    const len = n.length, s = Math.max(from, pos), e = Math.min(to, pos + len);
+    if (s < e) todo.push([n, s - pos, e - pos]);
+    pos += len;
+  }
+  for (const [node, s, e] of todo) {
+    const r = document.createRange(); r.setStart(node, s); r.setEnd(node, e);
+    const m = document.createElement('mark'); m.className = cls; m.dataset.id = id;
+    r.surroundContents(m);
+  }
+}
+function renderHighlights() {
+  if (!cur || cur.book.Format !== 'epub') return;
+  for (const m of $('page').querySelectorAll('mark.hl')) m.replaceWith(...m.childNodes);
+  $('page').normalize();
+  for (const a of cur.anns || []) {
+    if (a.kind === 'bookmark' || a.start.section !== cur.section) continue;
+    const cls = `hl ${a.color || ''} ${a.kind === 'note' ? 'note' : ''}`;
+    for (let b = a.start.block; b <= a.endBlock; b++) {
+      const el = blockEl(b); if (!el) continue;
+      const from = b === a.start.block ? a.start.offset : 0;
+      const to = b === a.endBlock ? a.endOffset : el.textContent.length;
+      wrapRange(el, from, to, cls, a.id);
+    }
+  }
+}
+$('page').addEventListener('click', (e) => {
+  const m = e.target.closest('mark.hl'); if (!m) return;
+  if ($('notes').hidden) togglePanel('notes');
+  renderNotesPanel(m.dataset.id);
+});
+
+// Selection -> anchor coordinates (block index + character offset).
+function pointOf(node, off) {
+  const el = (node.nodeType === 3 ? node.parentElement : node).closest('[data-b]');
+  if (!el) return null;
+  const r = document.createRange(); r.selectNodeContents(el); r.setEnd(node, off);
+  return { block: +el.dataset.b, offset: r.toString().length };
+}
+let pendingSel = null;
+function checkSelection() {
+  const sel = getSelection();
+  if (!cur || cur.book.Format !== 'epub' || !sel || sel.isCollapsed || !$('page').contains(sel.anchorNode)) { $('selbar').hidden = true; return; }
+  let a = pointOf(sel.anchorNode, sel.anchorOffset), b = pointOf(sel.focusNode, sel.focusOffset);
+  if (!a || !b) { $('selbar').hidden = true; return; }
+  if (a.block > b.block || (a.block === b.block && a.offset > b.offset)) [a, b] = [b, a];
+  pendingSel = { a, b, quote: sel.toString().trim() };
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const bar = $('selbar'); bar.hidden = false;
+  bar.style.top = Math.max(56, rect.top - 46) + 'px';
+  bar.style.left = Math.min(innerWidth - 190, Math.max(8, rect.left)) + 'px';
+}
+document.addEventListener('mouseup', () => setTimeout(checkSelection, 0));
+document.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow') || e.key === 'Shift') checkSelection(); });
+document.addEventListener('mousedown', (e) => { if (!$('selbar').contains(e.target)) $('selbar').hidden = true; });
+
+async function addAnn(kind, extra = {}) {
+  if (!pendingSel) return;
+  const { a, b, quote } = pendingSel;
+  const body = { kind, quote, color: 'yellow', endBlock: b.block, endOffset: b.offset, ...extra,
+    start: { section: cur.section, block: a.block, offset: a.offset, percent: currentAnchor().percent, quote } };
+  await send(`/api/books/${cur.id}/annotations`, 'POST', body);
+  pendingSel = null; getSelection().removeAllRanges(); $('selbar').hidden = true;
+  await loadAnns();
+}
+$('hlBtn').onclick = () => addAnn('highlight');
+$('noteBtn').onclick = () => {
+  const text = prompt('Note');
+  if (text && text.trim()) addAnn('note', { note: text.trim() });
+};
+$('markBtn').onclick = async () => {
+  const a = currentAnchor();
+  await send(`/api/books/${cur.id}/annotations`, 'POST', { kind: 'bookmark', quote: a.quote || (cur.book.Format === 'pdf' ? `Page ${cur.pdfPage + 1}` : ''), start: a });
+  await loadAnns(); flash($('markBtn'));
+};
+function flash(el) { el.style.outline = '2px solid var(--accent)'; setTimeout(() => (el.style.outline = ''), 600); }
+
+function jumpTo(a) {
+  $('notes').hidden = true;
+  if (cur.book.Format === 'pdf') { cur.anchor = a; renderPdfPage(a.section, a.offset / 1000); return; }
+  cur.anchor = a;
+  if (a.section === cur.section) restoreAnchor(a); else loadSection(a.section, a);
+}
+$('notesBtn').onclick = () => { if (togglePanel('notes')) renderNotesPanel(); };
+function renderNotesPanel(focusId) {
+  const p = $('notes'); p.replaceChildren();
+  const h = document.createElement('h3'); h.textContent = 'Notes & highlights'; p.append(h);
+  const ex = document.createElement('a'); ex.href = `/api/books/${cur.id}/export.md`; ex.textContent = 'Export as Markdown'; ex.download = 'notes.md'; p.append(ex);
+  if (!cur.anns.length) p.append(Object.assign(document.createElement('p'), { textContent: 'Select text to highlight it, or press the bookmark button.' }));
+  for (const a of cur.anns) {
+    const d = document.createElement('div'); d.className = 'ann';
+    const q = document.createElement('q');
+    q.textContent = (a.kind === 'bookmark' ? '🔖 ' : '') + (a.quote || 'Bookmark') ; q.onclick = () => jumpTo(a.start);
+    const meta = document.createElement('small'); meta.textContent = `${Math.round(a.start.percent * 100)}% · ${a.kind}`;
+    const ta = document.createElement('textarea'); ta.rows = 2; ta.placeholder = 'Add a note…'; ta.value = a.note || '';
+    ta.hidden = a.kind === 'bookmark';
+    const acts = document.createElement('div'); acts.className = 'acts';
+    const save = document.createElement('button'); save.textContent = 'Save note'; save.hidden = a.kind === 'bookmark';
+    save.onclick = async () => { await send(`/api/books/${cur.id}/annotations/${a.id}`, 'PATCH', { Note: ta.value }); await loadAnns(); };
+    const del = document.createElement('button'); del.textContent = 'Delete';
+    del.onclick = async () => { await api(`/api/books/${cur.id}/annotations/${a.id}`, { method: 'DELETE' }); await loadAnns(); };
+    acts.append(save, del); d.append(q, meta, ta, acts); p.append(d);
+    if (String(a.id) === String(focusId)) { d.style.background = 'var(--bg)'; setTimeout(() => d.scrollIntoView({ block: 'center' }), 0); }
+  }
+}
+
+/* ---------- search ---------- */
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+function hitEl(h, showTitle) {
+  const d = document.createElement('a'); d.className = 'hit';
+  if (showTitle) { const s = document.createElement('small'); s.textContent = h.title; d.append(s); }
+  const sn = document.createElement('span'); sn.innerHTML = h.snippet; // server escapes everything except <mark>
+  d.append(sn); return d;
+}
+async function runSearch(q, book, into, showTitle, open) {
+  into.replaceChildren();
+  if (q.trim().length < 2) return;
+  const hits = await api(`/api/search?q=${encodeURIComponent(q)}&book=${book || ''}`);
+  if (!hits.length) { into.textContent = 'No matches.'; return; }
+  for (const h of hits) { const el = hitEl(h, showTitle); el.onclick = () => open(h); into.append(el); }
+}
+const hitAnchor = (h) => ({ section: h.section, block: h.block, offset: 0, percent: 0, quote: '' });
+$('libSearch').oninput = debounce(() =>
+  runSearch($('libSearch').value, '', $('libHits'), true, (h) => openBook(h.bookId, hitAnchor(h))), 200);
+$('findBtn').onclick = () => { if (togglePanel('find')) $('findInput').focus(); };
+$('findInput').oninput = debounce(() =>
+  runSearch($('findInput').value, cur.id, $('findHits'), false, (h) => { $('find').hidden = true; jumpTo(hitAnchor(h)); }), 200);
+addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f' && cur && cur.book.Format === 'epub') { e.preventDefault(); $('findBtn').click(); }
+});

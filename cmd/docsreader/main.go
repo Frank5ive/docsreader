@@ -56,7 +56,7 @@ func run() error {
 		domain.FormatEPUB: epub.Reader{},
 		domain.FormatPDF:  pdf.Reader{},
 	}
-	lib := &app.Library{Books: store, Files: platform.FileStore{Dir: filepath.Join(dir, "books")}, Readers: readers, Now: time.Now}
+	lib := &app.Library{Books: store, Files: platform.FileStore{Dir: filepath.Join(dir, "books")}, Readers: readers, Index: store.Search(), Now: time.Now}
 	rdg := &app.Reading{Books: store, Progress: store.Progress(), Sessions: store, Readers: readers, Now: time.Now}
 
 	// Import any files passed on the command line.
@@ -66,7 +66,11 @@ func run() error {
 		}
 	}
 
-	srv := web.New(lib, rdg)
+	notes := &app.Annotate{Books: store, Anns: store.Annotations(), Now: time.Now}
+	if err := lib.EnsureIndexed(context.Background()); err != nil {
+		log.Printf("search indexing: %v", err)
+	}
+	srv := web.New(lib, rdg, notes, &app.Search{Index: store.Search()})
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
 		return err

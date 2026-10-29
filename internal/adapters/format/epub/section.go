@@ -130,3 +130,36 @@ func resolveRel(base, href string) string { return resolve(base, href) }
 
 // Compile-time check that Chapter is used by the toc builder.
 var _ = domain.Chapter{}
+
+// Blocks returns the text of each data-b block in section i, in block order.
+func (d *doc) Blocks(i int) ([]string, error) {
+	h, err := d.Section(i)
+	if err != nil {
+		return nil, err
+	}
+	root, err := html.Parse(strings.NewReader(h))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	var walk func(n *html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			for _, a := range n.Attr {
+				if a.Key == "data-b" {
+					if idx, err := strconv.Atoi(a.Val); err == nil {
+						for len(out) <= idx {
+							out = append(out, "")
+						}
+						out[idx] = strings.Join(strings.Fields(text(n)), " ")
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out, nil
+}
