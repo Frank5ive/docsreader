@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -30,6 +31,7 @@ type Server struct {
 	Reading *app.Reading
 	Notes   *app.Annotate
 	Search  *app.Search
+	Backup  *app.Backup // optional
 	token   string
 }
 
@@ -64,6 +66,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/books/{id}/annotations/{aid}", s.deleteNote)
 	mux.HandleFunc("GET /api/books/{id}/export.md", s.exportNotes)
 	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("PUT /api/books/{id}/tags", s.setTags)
+	mux.HandleFunc("GET /api/backup", s.backup)
 	mux.HandleFunc("GET /api/stats/books", s.bookTimes)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	ui, _ := fs.Sub(uiFS, "ui")
@@ -397,4 +401,31 @@ func (s *Server) bookTimes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) setTags(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Tags []string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&in); err != nil {
+		badRequest(w, "bad tags")
+		return
+	}
+	tags, err := s.Library.SetTags(r.Context(), r.PathValue("id"), in.Tags)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tags)
+}
+
+func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
+	if s.Backup == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="docsreader-backup-`+time.Now().Format("2006-01-02")+`.zip"`)
+	if err := s.Backup.WriteZip(r.Context(), w); err != nil {
+		// Headers are already sent; the truncated archive fails to open, which is the right signal.
+		log.Printf("backup: %v", err)
+	}
 }

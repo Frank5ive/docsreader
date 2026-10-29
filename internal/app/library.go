@@ -162,3 +162,62 @@ func (l *Library) EnsureIndexed(ctx context.Context) error {
 	}
 	return nil
 }
+
+const (
+	maxTags   = 20
+	maxTagLen = 40
+)
+
+// SetTags replaces a book's tags. Tags are trimmed, de-duplicated
+// case-insensitively and limited in number and length.
+func (l *Library) SetTags(ctx context.Context, id string, tags []string) ([]string, error) {
+	if _, err := l.Books.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	clean := []string{}
+	for _, t := range tags {
+		t = strings.Join(strings.Fields(t), " ")
+		if r := []rune(t); len(r) > maxTagLen {
+			t = string(r[:maxTagLen])
+		}
+		k := strings.ToLower(t)
+		if t == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		clean = append(clean, t)
+		if len(clean) == maxTags {
+			break
+		}
+	}
+	return clean, l.Books.SetTags(ctx, id, clean)
+}
+
+// RepairPaths points books at their copy inside booksDir. Stored paths are
+// absolute, so they are wrong after restoring a backup into another folder,
+// machine or OS.
+func (l *Library) RepairPaths(ctx context.Context, booksDir string) error {
+	books, err := l.Books.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, b := range books {
+		name := b.Path
+		if i := strings.LastIndexAny(name, `/\\`); i >= 0 {
+			name = name[i+1:]
+		}
+		moved := filepath.Join(booksDir, name)
+		if moved == b.Path {
+			continue
+		}
+		if _, err := os.Stat(moved); err != nil {
+			continue // not in the current library folder; leave the stored path alone
+		}
+		b.Path = moved
+		if err := l.Books.Save(ctx, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 	book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
 	start INTEGER NOT NULL, seconds INTEGER NOT NULL, words INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS sessions_book ON sessions(book_id);
+CREATE TABLE IF NOT EXISTS book_tags (
+	book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+	tag TEXT NOT NULL, PRIMARY KEY (book_id, tag));
 CREATE TABLE IF NOT EXISTS annotations (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
@@ -94,6 +97,10 @@ func (s *Store) Get(ctx context.Context, id string) (domain.Book, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, app.ErrNotFound
 	}
+	if err == nil {
+		tags, terr := s.tags(ctx)
+		b.Tags, err = tags[id], terr
+	}
 	return b, err
 }
 
@@ -111,7 +118,56 @@ func (s *Store) List(ctx context.Context) ([]domain.Book, error) {
 		}
 		out = append(out, b)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	tags, err := s.tags(ctx)
+	for i := range out {
+		out[i].Tags = tags[out[i].ID]
+	}
+	return out, err
+}
+
+// tags returns every book's tags keyed by book ID, sorted.
+func (s *Store) tags(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT book_id, tag FROM book_tags ORDER BY tag`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var id, tag string
+		if err := rows.Scan(&id, &tag); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], tag)
+	}
 	return out, rows.Err()
+}
+
+// SetTags replaces the tags of a book.
+func (s *Store) SetTags(ctx context.Context, id string, tags []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_tags WHERE book_id=?`, id); err != nil {
+		return err
+	}
+	for _, t := range tags {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO book_tags(book_id, tag) VALUES(?,?)`, id, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// Snapshot writes a consistent copy of the database to dst (which must not exist).
+func (s *Store) Snapshot(ctx context.Context, dst string) error {
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, dst)
+	return err
 }
 
 func (s *Store) Touch(ctx context.Context, id string, at time.Time) error {

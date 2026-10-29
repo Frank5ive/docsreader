@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  e2e:
+    # Browser tests drive the real UI in headless Chrome (preinstalled on the runner).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -tags e2e ./internal/adapters/web
+
+  build:
+    # Proves every release target compiles with no C toolchain.
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build -ldflags '-s -w' -o docsreader-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/docsreader
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docsreader-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: docsreader-${{ matrix.goos }}-${{ matrix.goarch }}

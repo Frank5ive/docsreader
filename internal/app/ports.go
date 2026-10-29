@@ -21,6 +21,7 @@ type BookRepository interface {
 	List(ctx context.Context) ([]domain.Book, error)
 	Touch(ctx context.Context, id string, at time.Time) error
 	Delete(ctx context.Context, id string) error
+	SetTags(ctx context.Context, id string, tags []string) error
 }
 
 type ProgressRepository interface {

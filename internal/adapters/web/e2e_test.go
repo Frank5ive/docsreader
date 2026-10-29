@@ -75,7 +75,7 @@ func (u *ui) run(a ...chromedp.Action) {
 func eval[T any](u *ui, js string) T {
 	u.t.Helper()
 	var v T
-	if err := chromedp.Run(u.ctx, chromedp.Evaluate(js, &v)); err != nil {
+	if err := chromedp.Run(u.ctx, chromedp.Evaluate(js, &v, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) })); err != nil {
 		u.t.Fatalf("eval %.80q: %v", js, err)
 	}
 	return v
@@ -609,5 +609,59 @@ func TestTableOfContents(t *testing.T) {
 	}
 	if got := u.text(`#pct`); got == "0%" || got == "" {
 		t.Errorf("progress %q after jumping to the last chapter", got)
+	}
+}
+
+func TestTagsAndFilter(t *testing.T) {
+	u := start(t)
+	a := u.importAPI("a.epub", buildEPUB("Alpha Book", 1, 3, nil))
+	u.importAPI("b.epub", buildEPUB("Beta Book", 1, 3, nil))
+	u.library()
+	if u.count(`#tagbar .chip`) != 0 {
+		t.Error("tag bar shown with no tags")
+	}
+	// Edit tags through the card's # button.
+	u.js(`document.querySelector('#shelf .card .tagbtn').click()`)
+	u.run(chromedp.WaitVisible(`.tagedit`))
+	card := eval[string](u, `document.querySelector('.tagedit').closest('.card').textContent`)
+	u.run(chromedp.SendKeys(`.tagedit`, "Sci-Fi, to read"+"\r"), chromedp.Sleep(900*time.Millisecond))
+	if n := u.count(`#tagbar .chip`); n != 3 { // All + #sci-fi + #to read
+		t.Fatalf("tag bar has %d chips, want 3", n)
+	}
+	tagged := "Alpha Book"
+	if !strings.Contains(card, tagged) {
+		tagged = "Beta Book"
+	}
+	_ = a
+	// Filtering by a tag shows only the tagged book; All restores both.
+	u.js(`[...document.querySelectorAll('#tagbar .chip')].find((c) => c.textContent === '#sci-fi').click()`)
+	if n := eval[int](u, `[...document.querySelectorAll('#shelf .card')].filter((c) => !c.hidden).length`); n != 1 {
+		t.Errorf("tag filter shows %d books, want 1", n)
+	}
+	if got := eval[string](u, `[...document.querySelectorAll('#shelf .card')].find((c) => !c.hidden).textContent`); !strings.Contains(got, tagged) {
+		t.Errorf("filter kept the wrong book: %q", got)
+	}
+	u.js(`[...document.querySelectorAll('#tagbar .chip')].find((c) => c.textContent === 'All').click()`)
+	if n := eval[int](u, `[...document.querySelectorAll('#shelf .card')].filter((c) => !c.hidden).length`); n != 2 {
+		t.Errorf("All shows %d books, want 2", n)
+	}
+	// Tags survive a reload.
+	u.library()
+	if n := u.count(`#tagbar .chip`); n != 3 {
+		t.Errorf("tags lost after reload: %d chips", n)
+	}
+}
+
+func TestBackupDownloadLink(t *testing.T) {
+	u := start(t)
+	u.importAPI("a.epub", buildEPUB("Alpha Book", 1, 3, nil))
+	u.library()
+	// Fetch through the page so the session cookie is used, as the link does.
+	size := eval[int](u, `fetch('/api/backup').then(async (r) => { if (!r.ok || r.headers.get('content-type') !== 'application/zip') return -1; return (await r.arrayBuffer()).byteLength; })`)
+	if size < 100 {
+		t.Errorf("backup download returned %d bytes", size)
+	}
+	if got := eval[string](u, `document.getElementById('backupLink').getAttribute('href')`); got != "/api/backup" {
+		t.Errorf("backup link href = %q", got)
 	}
 }

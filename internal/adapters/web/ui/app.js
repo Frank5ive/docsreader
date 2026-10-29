@@ -129,6 +129,7 @@ async function loadLibrary() {
   for (const b of books) {
     const c = document.createElement('div'); c.className = 'card';
     c.dataset.q = (b.Title + ' ' + b.Author).toLowerCase();
+    c.dataset.tags = JSON.stringify((b.Tags || []).map((t) => t.toLowerCase()));
     const meta = document.createElement('div'); meta.className = 'meta';
     const t = document.createElement('b'); t.textContent = b.Title; t.title = b.Title;
     const a = document.createElement('span');
@@ -139,10 +140,16 @@ async function loadLibrary() {
     const del = document.createElement('button'); del.className = 'del'; del.textContent = '×';
     del.onclick = async (e) => { e.stopPropagation(); if (confirm('Remove "' + b.Title + '"?')) { await api('/api/books/' + b.ID, { method: 'DELETE' }); loadLibrary(); } };
     c.title = etaOf(b, st);
-    c.append(coverEl(b), bar, meta, del);
+    const tagRow = document.createElement('div'); tagRow.className = 'tags';
+    for (const t of b.Tags || []) { const s = document.createElement('span'); s.textContent = t; tagRow.append(s); }
+    const tagBtn = document.createElement('button'); tagBtn.className = 'tagbtn'; tagBtn.textContent = '#'; tagBtn.title = 'Edit tags';
+    tagBtn.onclick = (e) => { e.stopPropagation(); editTags(b, c, tagRow); };
+    c.append(coverEl(b), bar, meta, tagRow, del, tagBtn);
     c.onclick = () => openBook(b.ID);
     shelf.append(c);
   }
+  renderTagBar(books);
+  filterShelf();
   const last = books.find((b) => b.progress && b.progress.percent < 0.999);
   const cont = $('continue'); cont.replaceChildren();
   if (last) {
@@ -570,9 +577,38 @@ async function runSearch(q, book, into, showTitle, open) {
   for (const h of hits) { const el = hitEl(h, showTitle); el.onclick = () => open(h); into.append(el); }
 }
 const hitAnchor = (h) => ({ section: h.section, block: h.block, offset: 0, percent: 0, quote: '' });
+let activeTag = null;
 function filterShelf() {
   const q = $('libSearch').value.trim().toLowerCase();
-  for (const c of $('shelf').children) c.hidden = !!q && !q.split(/\s+/).every((w) => c.dataset.q.includes(w));
+  for (const c of $('shelf').children) {
+    const okText = !q || q.split(/\s+/).every((w) => c.dataset.q.includes(w));
+    const okTag = !activeTag || JSON.parse(c.dataset.tags).includes(activeTag);
+    c.hidden = !(okText && okTag);
+  }
+}
+function renderTagBar(books) {
+  const all = [...new Set(books.flatMap((b) => (b.Tags || []).map((t) => t.toLowerCase())))].sort();
+  if (activeTag && !all.includes(activeTag)) activeTag = null;
+  const bar = $('tagbar'); bar.replaceChildren();
+  if (!all.length) return;
+  for (const t of ['All', ...all]) {
+    const chip = document.createElement('button'); chip.className = 'chip'; chip.textContent = t === 'All' ? 'All' : '#' + t;
+    chip.classList.toggle('on', t === 'All' ? !activeTag : t === activeTag);
+    chip.onclick = () => { activeTag = t === 'All' ? null : t; renderTagBar(books); filterShelf(); };
+    bar.append(chip);
+  }
+}
+// editTags swaps the tag row for an input; Enter saves, Escape cancels.
+function editTags(b, card, row) {
+  const input = document.createElement('input'); input.className = 'tagedit'; input.placeholder = 'tags, separated by commas';
+  input.value = (b.Tags || []).join(', ');
+  input.onclick = (e) => e.stopPropagation();
+  input.onkeydown = async (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') loadLibrary();
+    if (e.key === 'Enter') { await send(`/api/books/${b.ID}/tags`, 'PUT', { Tags: input.value.split(',') }); loadLibrary(); }
+  };
+  row.replaceChildren(input); input.focus();
 }
 $('libSearch').oninput = () => { filterShelf(); searchLibrary(); };
 const searchLibrary = debounce(() =>

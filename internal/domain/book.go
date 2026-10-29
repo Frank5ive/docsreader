@@ -24,6 +24,7 @@ type Book struct {
 	OpenedAt  time.Time
 	HasCover  bool
 	WordCount int
+	Tags      []string
 }
 
 // Chapter is one entry in a table of contents.

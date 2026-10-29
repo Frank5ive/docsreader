@@ -33,6 +33,7 @@ func run() error {
 	dataDir := flag.String("data", "", "data directory (default: per-user config dir)")
 	port := flag.Int("port", 0, "port to listen on (default: random)")
 	noOpen := flag.Bool("no-browser", false, "do not open the browser")
+	restore := flag.String("restore", "", "restore a backup .zip into the data directory and exit")
 	flag.Parse()
 
 	dir := *dataDir
@@ -44,6 +45,14 @@ func run() error {
 		dir = d
 	} else if err := os.MkdirAll(filepath.Join(dir, "books"), 0o700); err != nil {
 		return err
+	}
+
+	if *restore != "" {
+		if err := app.Restore(*restore, dir); err != nil {
+			return err
+		}
+		fmt.Println("restored backup into", dir)
+		return nil
 	}
 
 	store, err := sqlite.Open(filepath.Join(dir, "docsreader.db"))
@@ -70,7 +79,11 @@ func run() error {
 	if err := lib.EnsureIndexed(context.Background()); err != nil {
 		log.Printf("search indexing: %v", err)
 	}
+	if err := lib.RepairPaths(context.Background(), filepath.Join(dir, "books")); err != nil {
+		log.Printf("repair book paths: %v", err)
+	}
 	srv := web.New(lib, rdg, notes, &app.Search{Index: store.Search()})
+	srv.Backup = &app.Backup{DB: store, BooksDir: filepath.Join(dir, "books"), TempDir: dir}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
 		return err

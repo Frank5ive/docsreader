@@ -3,12 +3,14 @@ package web_test
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -201,5 +203,130 @@ func TestAnnotationsAndSearch(t *testing.T) {
 	json.NewDecoder(do("GET", "/api/search?q=two", nil, "").Body).Decode(&hits)
 	if len(hits) != 0 {
 		t.Fatalf("index not cleared: %+v", hits)
+	}
+}
+
+func importEPUB(t *testing.T, do func(method, path string, body []byte, ctype string) *http.Response) domain.Book {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "t.epub")
+	fw.Write(epubBytes(t))
+	mw.Close()
+	var b domain.Book
+	json.NewDecoder(do("POST", "/api/books", body.Bytes(), mw.FormDataContentType()).Body).Decode(&b)
+	return b
+}
+
+func TestTags(t *testing.T) {
+	ts, s := newServer(t, t.TempDir())
+	do := client(ts, s)
+	b := importEPUB(t, do)
+
+	r := do("PUT", "/api/books/"+b.ID+"/tags", []byte(`{"Tags":["  Sci-Fi ","sci-fi","To   Read","",  "`+strings.Repeat("x", 100)+`"]}`), "application/json")
+	var got []string
+	json.NewDecoder(r.Body).Decode(&got)
+	if r.StatusCode != 200 || len(got) != 3 || got[0] != "Sci-Fi" || got[1] != "To Read" || len(got[2]) != 40 {
+		t.Fatalf("normalised tags = %q (status %d)", got, r.StatusCode)
+	}
+	var list []struct{ Tags []string }
+	json.NewDecoder(do("GET", "/api/books", nil, "").Body).Decode(&list)
+	if len(list) != 1 || len(list[0].Tags) != 3 {
+		t.Fatalf("list tags = %+v", list)
+	}
+	if r := do("PUT", "/api/books/nope/tags", []byte(`{"Tags":["a"]}`), "application/json"); r.StatusCode != 404 {
+		t.Errorf("unknown book: %d", r.StatusCode)
+	}
+	do("PUT", "/api/books/"+b.ID+"/tags", []byte(`{"Tags":[]}`), "application/json")
+	json.NewDecoder(do("GET", "/api/books", nil, "").Body).Decode(&list)
+	if len(list[0].Tags) != 0 {
+		t.Errorf("tags not cleared: %+v", list[0].Tags)
+	}
+}
+
+// TestBackupRestoreRoundTrip downloads a backup, restores it into a different
+// directory (so stored absolute paths are wrong) and expects the library,
+// reading position and annotations to come back with a readable book.
+func TestBackupRestoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st, err := sqlite.Open(filepath.Join(dir, app.DBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "books"), 0o700)
+	readers := map[domain.Format]app.FormatReader{domain.FormatEPUB: epub.Reader{}}
+	lib := &app.Library{Books: st, Files: platform.FileStore{Dir: filepath.Join(dir, "books")}, Readers: readers, Index: st.Search(), Now: time.Now}
+	rd := &app.Reading{Books: st, Progress: st.Progress(), Sessions: st, Readers: readers, Now: time.Now}
+	srv := web.New(lib, rd, &app.Annotate{Books: st, Anns: st.Annotations(), Now: time.Now}, &app.Search{Index: st.Search()})
+	srv.Backup = &app.Backup{DB: st, BooksDir: filepath.Join(dir, "books"), TempDir: dir}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	do := client(ts, srv)
+	b := importEPUB(t, do)
+	do("PUT", "/api/books/"+b.ID+"/progress", []byte(`{"section":0,"block":1,"offset":0,"percent":0.5,"quote":"two"}`), "application/json")
+	do("POST", "/api/books/"+b.ID+"/annotations", []byte(`{"kind":"bookmark","start":{"section":0,"block":1,"percent":0.5}}`), "application/json")
+	do("PUT", "/api/books/"+b.ID+"/tags", []byte(`{"Tags":["keep"]}`), "application/json")
+
+	resp := do("GET", "/api/backup", nil, "")
+	zipPath := filepath.Join(t.TempDir(), "backup.zip")
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" {
+		t.Fatalf("backup: %d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	os.WriteFile(zipPath, data, 0o600)
+	st.Close()
+
+	newDir := t.TempDir()
+	if err := app.Restore(zipPath, newDir); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := sqlite.Open(filepath.Join(newDir, app.DBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	lib2 := &app.Library{Books: st2, Readers: readers, Now: time.Now}
+	if err := lib2.RepairPaths(context.Background(), filepath.Join(newDir, "books")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st2.Get(context.Background(), b.ID)
+	if err != nil || !strings.HasPrefix(got.Path, newDir) || len(got.Tags) != 1 || got.Tags[0] != "keep" {
+		t.Fatalf("restored book = %+v, %v", got, err)
+	}
+	if doc, err := readers[domain.FormatEPUB].Open(got.Path); err != nil {
+		t.Fatalf("restored book not readable: %v", err)
+	} else {
+		doc.Close()
+	}
+	p, err := st2.Progress().Get(context.Background(), b.ID)
+	if err != nil || p.Anchor.Block != 1 || p.Anchor.Quote != "two" {
+		t.Fatalf("restored progress = %+v, %v", p, err)
+	}
+	if l, _ := st2.Annotations().List(context.Background(), b.ID); len(l) != 1 {
+		t.Fatalf("restored annotations = %d", len(l))
+	}
+}
+
+func TestRestoreRejectsHostileArchive(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "evil.zip")
+	f, _ := os.Create(p)
+	zw := zip.NewWriter(f)
+	for _, n := range []string{app.DBName, "../escape.txt", "books/../../escape2.txt", "books/sub/x.epub"} {
+		w, _ := zw.Create(n)
+		w.Write([]byte("x"))
+	}
+	zw.Close()
+	f.Close()
+	dir := t.TempDir()
+	if err := app.Restore(p, dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{filepath.Join(dir, "..", "escape.txt"), filepath.Join(dir, "..", "..", "escape2.txt"), filepath.Join(dir, "books", "sub")} {
+		if _, err := os.Stat(bad); err == nil {
+			t.Errorf("hostile entry was extracted: %s", bad)
+		}
+	}
+	if err := app.Restore(filepath.Join(t.TempDir(), "missing.zip"), dir); err == nil {
+		t.Error("missing archive accepted")
 	}
 }
