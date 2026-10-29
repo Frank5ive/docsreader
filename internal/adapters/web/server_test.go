@@ -53,6 +53,7 @@ func newServer(t *testing.T, dir string) (*httptest.Server, *web.Server) {
 	rd := &app.Reading{Books: st, Progress: st.Progress(), Sessions: st, Readers: readers, Now: time.Now}
 	lib.Index = st.Search()
 	s := web.New(lib, rd, &app.Annotate{Books: st, Anns: st.Annotations(), Now: time.Now}, &app.Search{Index: st.Search()})
+	s.Backup = &app.Backup{DB: st, BooksDir: dir, TempDir: dir}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts, s
