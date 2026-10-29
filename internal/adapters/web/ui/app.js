@@ -395,12 +395,13 @@ const PDF_TOP = 60; // viewport y (px) that counts as the reading line, just bel
 const clampPage = (n) => Math.max(0, Math.min(cur.pdf.numPages - 1, n | 0));
 
 async function openPdf() {
+  const book = cur; // the reader may be closed while pdf.js loads
   const pdfjs = await import('/vendor/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
-  cur.pdfjs = pdfjs;
-  cur.pdf = await pdfjs.getDocument(`/api/books/${cur.id}/file`).promise;
-  cur.book.Sections = cur.pdf.numPages;
-  cur.pdfBase = (await cur.pdf.getPage(1)).getViewport({ scale: 1 }); // page size used for placeholders until a page is drawn
+  const pdf = await pdfjs.getDocument(`/api/books/${book.id}/file`).promise;
+  const base = (await pdf.getPage(1)).getViewport({ scale: 1 }); // page size used for placeholders until a page is drawn
+  if (cur !== book) return;
+  cur.pdfjs = pdfjs; cur.pdf = pdf; cur.pdfBase = base; cur.book.Sections = pdf.numPages;
   await layoutPdf({ page: clampPage(cur.anchor ? cur.anchor.section : 0), frac: cur.anchor ? cur.anchor.offset / 1000 : 0 });
 }
 function pdfScale() {
@@ -425,7 +426,7 @@ async function layoutPdf(at) {
     wrap.append(el); cur.pages.push({ el, tok: 0, rendered: null, task: null });
   }
   cur.pdfObserver = new IntersectionObserver((entries) => {
-    if (seq !== cur.layoutSeq) return;
+    if (!cur || seq !== cur.layoutSeq) return;
     for (const e of entries) { const n = +e.target.dataset.page; if (e.isIntersecting) renderPdfPage(n); else releasePdfPage(n); }
   }, { rootMargin: '1500px 0px' });
   for (const pg of cur.pages) cur.pdfObserver.observe(pg.el);
@@ -433,15 +434,15 @@ async function layoutPdf(at) {
   await gotoPdf(at.page, at.frac || 0);
 }
 function renderPdfPage(n) {
-  const pg = cur.pages[n];
+  const pg = cur && cur.pages && cur.pages[n];
   if (!pg) return Promise.resolve();
   if (pg.rendered) return pg.rendered;
-  const tok = ++pg.tok, seq = cur.layoutSeq;
-  const alive = () => pg.tok === tok && seq === cur.layoutSeq; // false once released or re-laid out
+  const tok = ++pg.tok, book = cur, seq = cur.layoutSeq;
+  const alive = () => cur === book && pg.tok === tok && seq === cur.layoutSeq; // false once released or re-laid out
   pg.rendered = (async () => {
-    const page = await cur.pdf.getPage(n + 1);
+    const page = await book.pdf.getPage(n + 1);
     if (!alive()) return;
-    const dpr = devicePixelRatio || 1, scale = cur.pdfScale;
+    const dpr = devicePixelRatio || 1, scale = book.pdfScale;
     const vp = page.getViewport({ scale }), hi = page.getViewport({ scale: scale * dpr });
     const c = document.createElement('canvas');
     c.width = hi.width; c.height = hi.height; c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px';
@@ -451,7 +452,7 @@ function renderPdfPage(n) {
     const tl = document.createElement('div'); tl.className = 'textLayer';
     pg.el.style.width = vp.width + 'px'; pg.el.style.height = vp.height + 'px';
     pg.el.replaceChildren(c, tl);
-    await new cur.pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
+    await new book.pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
     if (!alive()) return;
     // Number the text spans in reading order so selections are stored as (block, offset) like EPUB paragraphs.
     let b = 0;
@@ -461,7 +462,7 @@ function renderPdfPage(n) {
   return pg.rendered;
 }
 function releasePdfPage(n) {
-  const pg = cur.pages[n];
+  const pg = cur && cur.pages && cur.pages[n];
   if (!pg || !pg.rendered) return;
   pg.tok++; pg.rendered = null;
   if (pg.task) pg.task.cancel();
