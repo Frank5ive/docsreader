@@ -9,7 +9,7 @@ const send = (url, method, body) =>
 
 /* ---------- settings ---------- */
 const systemDark = matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
-const defaults = { theme: systemDark ? 'dark' : 'light', font: 'serif', size: 19, lh: 17, width: 68, focus: false };
+const defaults = { theme: systemDark ? 'dark' : 'light', font: 'serif', size: 19, lh: 17, width: 68, focus: false, pdfZoom: 1 };
 let prefs = { ...defaults, ...safeParse(localStorage.getItem('prefs')) };
 function safeParse(s) { try { return JSON.parse(s) || {}; } catch { return {}; } }
 // Preferences are stored only once the user changes something, so the default theme keeps following the OS.
@@ -211,7 +211,7 @@ async function showLibrary() {
   $('library').hidden = false; $('reader').hidden = true; for (const p of panels) $(p).hidden = true;
   $('selbar').hidden = $('hlbar').hidden = true;
   document.body.classList.remove('reading', 'chrome-hidden'); $('chap').textContent = $('left').textContent = '';
-  for (const b of ['tocBtn', 'histBtn', 'markBtn', 'notesBtn', 'findBtn']) $(b).hidden = true; $('title').textContent = 'docsreader';
+  for (const b of ['tocBtn', 'histBtn', 'markBtn', 'notesBtn', 'findBtn', 'zoomOut', 'zoomLbl', 'zoomIn']) $(b).hidden = true; $('title').textContent = 'docsreader';
   loadLibrary();
 }
 
@@ -226,6 +226,7 @@ async function openBook(id, target) {
   $('title').textContent = info.book.Title;
   const pdfBook = info.book.Format === 'pdf';
   $('page').hidden = pdfBook; $('pdfWrap').hidden = !pdfBook; $('tocBtn').hidden = pdfBook; $('histBtn').hidden = false;
+  for (const z of ['zoomOut', 'zoomLbl', 'zoomIn']) $(z).hidden = !pdfBook;
   $('markBtn').hidden = $('notesBtn').hidden = false; $('findBtn').hidden = false;
   await loadAnns();
   applyPrefs();
@@ -330,7 +331,7 @@ function updateLeft(percent) {
     ? ` · ${etaText(words * (1 - percent) / (cur.wpm || 230) * 60)} left` : '';
 }
 function onScroll() {
-  if (!cur || $('reader').hidden || (cur.book.Format === 'pdf' && !cur.pdf)) return; // PDF still loading
+  if (!cur || $('reader').hidden || (cur.book.Format === 'pdf' && !(cur.pages && cur.pages.length))) return; // PDF still loading
   const a = currentAnchor(); cur.anchor = a;
   $('pct').textContent = cur.book.Format === 'pdf'
     ? `p.${cur.pdfPage + 1}/${cur.pdf.numPages}` : Math.round(a.percent * 100) + '%';
@@ -377,60 +378,140 @@ function seekTo(p) {
   loadSection(n, null);
 }
 addEventListener('keydown', (e) => {
-  if ($('reader').hidden || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
-  if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); step(1); }
-  if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); step(-1); }
+  if ($('reader').hidden || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const pdf = isPdf(); // PDFs scroll continuously, so Space and PageUp/PageDown keep their native behaviour
+  if (e.key === 'ArrowRight' || (!pdf && (e.key === 'PageDown' || e.key === ' '))) { e.preventDefault(); step(1); }
+  if (e.key === 'ArrowLeft' || (!pdf && e.key === 'PageUp')) { e.preventDefault(); step(-1); }
   if (e.key === 'Escape') { if (panels.some((p) => !$(p).hidden)) $('scrim').click(); else showLibrary(); }
   if (e.key === 'b') toggleBookmark();
+  if (pdf && (e.key === '+' || e.key === '=')) zoomStep(1);
+  if (pdf && e.key === '-') zoomStep(-1);
+  if (pdf && e.key === '0') setZoom(1);
 });
 
-/* ---------- PDF (rendered client-side by vendored pdf.js) ---------- */
+/* ---------- PDF: continuous scroll and zoom (rendered client-side by vendored pdf.js) ---------- */
+const PDF_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]; // multiples of "fit to width"
+const PDF_TOP = 60; // viewport y (px) that counts as the reading line, just below the toolbar
+const clampPage = (n) => Math.max(0, Math.min(cur.pdf.numPages - 1, n | 0));
+
 async function openPdf() {
   const pdfjs = await import('/vendor/pdf.min.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.mjs';
   cur.pdfjs = pdfjs;
   cur.pdf = await pdfjs.getDocument(`/api/books/${cur.id}/file`).promise;
   cur.book.Sections = cur.pdf.numPages;
-  cur.pdfPage = cur.anchor ? cur.anchor.section : 0;
-  await renderPdfPage(cur.pdfPage, cur.anchor ? cur.anchor.offset / 1000 : 0);
+  cur.pdfBase = (await cur.pdf.getPage(1)).getViewport({ scale: 1 }); // page size used for placeholders until a page is drawn
+  await layoutPdf({ page: clampPage(cur.anchor ? cur.anchor.section : 0), frac: cur.anchor ? cur.anchor.offset / 1000 : 0 });
 }
-async function renderPdfPage(n, yFrac = 0, block = null) {
-  n = Math.max(0, Math.min(cur.pdf.numPages - 1, n));
-  cur.pdfPage = n;
-  const seq = (cur.renderSeq = (cur.renderSeq || 0) + 1); // drop results of superseded renders
-  const page = await cur.pdf.getPage(n + 1);
-  const dpr = devicePixelRatio || 1;
-  const vp0 = page.getViewport({ scale: 1 });
-  const cssScale = Math.min(1.8, (Math.min(innerWidth, 900) - 24) / vp0.width);
-  const vp = page.getViewport({ scale: cssScale });
-  const wrap = document.createElement('div'); wrap.className = 'pdfPage';
-  wrap.style.width = vp.width + 'px'; wrap.style.height = vp.height + 'px';
-  wrap.style.setProperty('--scale-factor', cssScale);
-  const c = document.createElement('canvas');
-  const hi = page.getViewport({ scale: cssScale * dpr });
-  c.width = hi.width; c.height = hi.height; c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px';
-  const tl = document.createElement('div'); tl.className = 'textLayer';
-  wrap.append(c, tl);
-  await page.render({ canvasContext: c.getContext('2d'), viewport: hi }).promise;
-  await new cur.pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
-  if (seq !== cur.renderSeq) return;
-  // Number the text spans in reading order so selections can be stored as (block, offset) like EPUB paragraphs.
-  let b = 0;
-  for (const sp of tl.querySelectorAll('span:not(.markedContent)')) if (sp.textContent) sp.dataset.b = b++;
-  $('pdfWrap').replaceChildren(wrap);
-  renderHighlights();
-  const target = block != null ? blockEl(block) : null;
-  const top = target ? target.getBoundingClientRect().top + scrollY - 90 : 60 + yFrac * vp.height;
-  window.scrollTo(0, top);
+function pdfScale() {
+  const fit = (Math.min(innerWidth, 900) - 24) / cur.pdfBase.width;
+  return Math.max(0.2, Math.min(5, fit * prefs.pdfZoom));
+}
+// layoutPdf lays out one placeholder per page and draws only the pages near the
+// viewport, so a thousand-page book costs no more than a short one.
+// Nothing is awaited between creating the placeholders and scrolling to `at`, so
+// no scroll event can record a position in between.
+async function layoutPdf(at) {
+  const seq = (cur.layoutSeq = (cur.layoutSeq || 0) + 1);
+  if (cur.pdfObserver) cur.pdfObserver.disconnect();
+  for (const pg of cur.pages || []) if (pg.task) pg.task.cancel();
+  cur.pdfScale = pdfScale();
+  const wrap = $('pdfWrap'); wrap.replaceChildren();
+  cur.pages = [];
+  for (let n = 0; n < cur.pdf.numPages; n++) {
+    const el = document.createElement('div'); el.className = 'pdfPage'; el.dataset.page = n;
+    el.style.width = cur.pdfBase.width * cur.pdfScale + 'px'; el.style.height = cur.pdfBase.height * cur.pdfScale + 'px';
+    el.style.setProperty('--scale-factor', cur.pdfScale);
+    wrap.append(el); cur.pages.push({ el, tok: 0, rendered: null, task: null });
+  }
+  cur.pdfObserver = new IntersectionObserver((entries) => {
+    if (seq !== cur.layoutSeq) return;
+    for (const e of entries) { const n = +e.target.dataset.page; if (e.isIntersecting) renderPdfPage(n); else releasePdfPage(n); }
+  }, { rootMargin: '1500px 0px' });
+  for (const pg of cur.pages) cur.pdfObserver.observe(pg.el);
+  updateZoomLabel();
+  await gotoPdf(at.page, at.frac || 0);
+}
+function renderPdfPage(n) {
+  const pg = cur.pages[n];
+  if (!pg) return Promise.resolve();
+  if (pg.rendered) return pg.rendered;
+  const tok = ++pg.tok, seq = cur.layoutSeq;
+  const alive = () => pg.tok === tok && seq === cur.layoutSeq; // false once released or re-laid out
+  pg.rendered = (async () => {
+    const page = await cur.pdf.getPage(n + 1);
+    if (!alive()) return;
+    const dpr = devicePixelRatio || 1, scale = cur.pdfScale;
+    const vp = page.getViewport({ scale }), hi = page.getViewport({ scale: scale * dpr });
+    const c = document.createElement('canvas');
+    c.width = hi.width; c.height = hi.height; c.style.width = vp.width + 'px'; c.style.height = vp.height + 'px';
+    pg.task = page.render({ canvasContext: c.getContext('2d'), viewport: hi });
+    try { await pg.task.promise; } catch (e) { if (e && e.name === 'RenderingCancelledException') return; throw e; }
+    if (!alive()) return;
+    const tl = document.createElement('div'); tl.className = 'textLayer';
+    pg.el.style.width = vp.width + 'px'; pg.el.style.height = vp.height + 'px';
+    pg.el.replaceChildren(c, tl);
+    await new cur.pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: tl, viewport: vp }).render();
+    if (!alive()) return;
+    // Number the text spans in reading order so selections are stored as (block, offset) like EPUB paragraphs.
+    let b = 0;
+    for (const sp of tl.querySelectorAll('span:not(.markedContent)')) if (sp.textContent) sp.dataset.b = b++;
+    renderHighlights(n);
+  })();
+  return pg.rendered;
+}
+function releasePdfPage(n) {
+  const pg = cur.pages[n];
+  if (!pg || !pg.rendered) return;
+  pg.tok++; pg.rendered = null;
+  if (pg.task) pg.task.cancel();
+  pg.task = null; pg.el.replaceChildren();
+}
+// gotoPdf scrolls to a page (and a fraction down it, or to an exact text span).
+async function gotoPdf(page, frac = 0, block = null) {
+  page = clampPage(page);
+  const el = cur.pages[page].el, r = el.getBoundingClientRect();
+  scrollTo(scrollX, Math.max(0, r.top + scrollY + frac * r.height - PDF_TOP));
+  if (block != null) {
+    await renderPdfPage(page);
+    const span = el.querySelector(`[data-b="${block}"]`);
+    if (span) scrollTo(scrollX, Math.max(0, span.getBoundingClientRect().top + scrollY - 90));
+  }
   onScroll();
 }
-function pdfAnchor() {
-  const c = $('pdfWrap').querySelector('.pdfPage');
-  const h = c ? c.getBoundingClientRect().height : 1;
-  const y = Math.max(0, Math.min(1000, Math.round(((scrollY - 60) / h) * 1000)));
-  return { section: cur.pdfPage, block: 0, offset: y, percent: (cur.pdfPage + y / 1000) / cur.pdf.numPages, quote: '' };
+function goPdf(n) { return gotoPdf(n).then(() => { dirty = true; flush(); }); }
+function pdfCurrentPage() {
+  const last = cur.pages.length - 1, bottom = (k) => cur.pages[k].el.getBoundingClientRect().bottom;
+  let i = Math.min(cur.pdfPage || 0, last);
+  while (i < last && bottom(i) <= PDF_TOP) i++;
+  while (i > 0 && bottom(i - 1) > PDF_TOP) i--;
+  return i;
 }
-function goPdf(n) { renderPdfPage(n).then(() => { dirty = true; flush(); }); }
+function pdfAnchor() {
+  const i = (cur.pdfPage = pdfCurrentPage());
+  const r = cur.pages[i].el.getBoundingClientRect();
+  const y = Math.max(0, Math.min(1000, Math.round(((PDF_TOP - r.top) / r.height) * 1000)));
+  return { section: i, block: 0, offset: y, percent: (i + y / 1000) / cur.pdf.numPages, quote: '' };
+}
+function updateZoomLabel() { $('zoomLbl').textContent = Math.round(prefs.pdfZoom * 100) + '%'; }
+async function setZoom(z) {
+  if (!cur || !isPdf() || !cur.pages || !PDF_ZOOMS.includes(z) || z === prefs.pdfZoom) return;
+  const a = pdfAnchor(); // keep the same spot on the page
+  prefs.pdfZoom = z; applyPrefs(true);
+  await layoutPdf({ page: a.section, frac: a.offset / 1000 });
+}
+function zoomStep(d) {
+  const i = PDF_ZOOMS.indexOf(prefs.pdfZoom);
+  setZoom(PDF_ZOOMS[Math.max(0, Math.min(PDF_ZOOMS.length - 1, (i < 0 ? PDF_ZOOMS.indexOf(1) : i) + d))]);
+}
+$('zoomIn').onclick = () => zoomStep(1);
+$('zoomOut').onclick = () => zoomStep(-1);
+$('zoomLbl').onclick = () => setZoom(1);
+// A different window width changes "fit to width"; re-lay out only if the scale really changed.
+addEventListener('resize', debounce(() => {
+  if (!cur || !isPdf() || !cur.pages || Math.abs(pdfScale() - cur.pdfScale) < 0.01) return;
+  const a = pdfAnchor(); layoutPdf({ page: a.section, frac: a.offset / 1000 });
+}, 250));
 
 /* ---------- reading time (idle-aware) ---------- */
 let lastAct = 0, active = 0, timer = 0;
@@ -465,7 +546,6 @@ async function loadAnns() {
 const isPdf = () => cur.book.Format === 'pdf';
 const root = () => (isPdf() ? $('pdfWrap') : $('page'));
 const sectionNow = () => (isPdf() ? cur.pdfPage : cur.section);
-const blockEl = (n) => root().querySelector(`[data-b="${n}"]`);
 
 // wrapRange wraps characters [from,to) of el's text in <mark> elements.
 function wrapRange(el, from, to, cls, id) {
@@ -482,18 +562,25 @@ function wrapRange(el, from, to, cls, id) {
     r.surroundContents(m);
   }
 }
-function renderHighlights() {
+// renderHighlights redraws marks: the whole EPUB section, or for PDFs the text
+// layer of one page (onlyPage) or of every drawn page.
+function renderHighlights(onlyPage = null) {
   if (!cur) return;
-  for (const m of root().querySelectorAll('mark.hl')) m.replaceWith(...m.childNodes);
-  root().normalize();
-  for (const a of cur.anns || []) {
-    if (a.kind === 'bookmark' || a.start.section !== sectionNow()) continue;
-    const cls = `hl ${a.color || ''} ${a.kind === 'note' ? 'note' : ''}`;
-    for (let b = a.start.block; b <= a.endBlock; b++) {
-      const el = blockEl(b); if (!el) continue;
-      const from = b === a.start.block ? a.start.offset : 0;
-      const to = b === a.endBlock ? a.endOffset : el.textContent.length;
-      wrapRange(el, from, to, cls, a.id);
+  const targets = isPdf()
+    ? (cur.pages || []).map((pg, n) => ({ el: pg.el.querySelector('.textLayer'), section: n })).filter((t) => t.el && (onlyPage == null || t.section === onlyPage))
+    : [{ el: $('page'), section: cur.section }];
+  for (const { el, section } of targets) {
+    for (const m of el.querySelectorAll('mark.hl')) m.replaceWith(...m.childNodes);
+    el.normalize();
+    for (const a of cur.anns || []) {
+      if (a.kind === 'bookmark' || a.start.section !== section) continue;
+      const cls = `hl ${a.color || ''} ${a.kind === 'note' ? 'note' : ''}`;
+      for (let b = a.start.block; b <= a.endBlock; b++) {
+        const be = el.querySelector(`[data-b="${b}"]`); if (!be) continue;
+        const from = b === a.start.block ? a.start.offset : 0;
+        const to = b === a.endBlock ? a.endOffset : be.textContent.length;
+        wrapRange(be, from, to, cls, a.id);
+      }
     }
   }
 }
@@ -529,14 +616,21 @@ let pendingSel = null;
 function checkSelection() {
   const sel = getSelection();
   if (!cur || !sel || sel.isCollapsed || sel.rangeCount === 0 || !root().contains(sel.anchorNode) || !root().contains(sel.focusNode)) { $('selbar').hidden = true; return; }
-  const range = sel.getRangeAt(0);
-  const spans = [...root().querySelectorAll('[data-b]')].filter((el) => range.intersectsNode(el));
+  const range = sel.getRangeAt(0); // always in document order
+  // A highlight lives on one EPUB section or one PDF page; a selection spanning pages is clamped to its first page.
+  let scope = $('page'), section = cur.section;
+  if (isPdf()) {
+    const pg = (cur.pages || []).findIndex((p) => range.intersectsNode(p.el));
+    if (pg < 0) { $('selbar').hidden = true; return; }
+    scope = cur.pages[pg].el; section = pg;
+  }
+  const spans = [...scope.querySelectorAll('[data-b]')].filter((el) => range.intersectsNode(el));
   if (!spans.length) { $('selbar').hidden = true; return; }
-  let a = pointOf(sel.anchorNode, sel.anchorOffset) || { block: +spans[0].dataset.b, offset: 0 };
-  let b = pointOf(sel.focusNode, sel.focusOffset) || { block: +spans.at(-1).dataset.b, offset: spans.at(-1).textContent.length };
-  if (a.block > b.block || (a.block === b.block && a.offset > b.offset)) [a, b] = [b, a];
+  const inScope = (n) => scope.contains(n.nodeType === 3 ? n.parentElement : n);
+  const a = (inScope(range.startContainer) && pointOf(range.startContainer, range.startOffset)) || { block: +spans[0].dataset.b, offset: 0 };
+  const b = (inScope(range.endContainer) && pointOf(range.endContainer, range.endOffset)) || { block: +spans.at(-1).dataset.b, offset: spans.at(-1).textContent.length };
   if (a.block === b.block && a.offset === b.offset) { $('selbar').hidden = true; return; }
-  pendingSel = { a, b, quote: sel.toString().replace(/\s+/g, ' ').trim() };
+  pendingSel = { a, b, section, quote: sel.toString().replace(/\s+/g, ' ').trim() };
   const rect = range.getBoundingClientRect();
   const bar = $('selbar'); bar.hidden = false; $('noteForm').hidden = true; $('selBtns').hidden = false;
   bar.style.top = Math.max(56, rect.top - 52) + 'px';
@@ -548,14 +642,13 @@ document.addEventListener('mousedown', (e) => { if (!$('selbar').contains(e.targ
 
 async function addAnn(kind, extra = {}) {
   if (!pendingSel) return;
-  const { a, b, quote } = pendingSel;
-  const sec = sectionNow();
+  const { a, b, quote, section: sec } = pendingSel;
   const covered = (cur.anns || []).some((x) => x.kind !== 'bookmark' && x.start.section === sec &&
     (x.start.block < a.block || (x.start.block === a.block && x.start.offset <= a.offset)) &&
     (x.endBlock > b.block || (x.endBlock === b.block && x.endOffset >= b.offset)));
   if (covered && kind === 'highlight') { getSelection().removeAllRanges(); $('selbar').hidden = true; toast('Already highlighted'); return; }
   const body = { kind, quote, color: 'yellow', endBlock: b.block, endOffset: b.offset, ...extra,
-    start: { section: sectionNow(), block: a.block, offset: a.offset, percent: currentAnchor().percent, quote } };
+    start: { section: sec, block: a.block, offset: a.offset, percent: isPdf() ? sec / cur.pdf.numPages : currentAnchor().percent, quote } };
   await send(`/api/books/${cur.id}/annotations`, 'POST', body);
   pendingSel = null; getSelection().removeAllRanges(); $('selbar').hidden = true;
   await loadAnns();
@@ -570,7 +663,7 @@ const bookmarkHere = () => {
   return (cur.anns || []).find((x) => x.kind === 'bookmark' && x.start.section === a.section && (isPdf() || x.start.block === a.block));
 };
 function updateMarkBtn() {
-  if (!cur || (isPdf() && !cur.pdf)) return; // PDF not loaded yet: no page to compare
+  if (!cur || (isPdf() && !cur.pages)) return; // PDF not laid out yet: no page to compare
   $('markBtn').classList.toggle('on', !!bookmarkHere());
 }
 async function toggleBookmark() {
@@ -592,32 +685,83 @@ function flash(el) { el.style.outline = '2px solid var(--accent)'; setTimeout(()
 
 function jumpTo(a, exact = false) {
   $('notes').hidden = true;
-  if (isPdf()) { cur.anchor = a; renderPdfPage(a.section, a.offset / 1000, exact ? a.block : null); return; }
+  if (isPdf()) { cur.anchor = a; gotoPdf(a.section, a.offset / 1000, exact ? a.block : null); return; }
   cur.anchor = a;
   if (a.section === cur.section) restoreAnchor(a); else loadSection(a.section, a);
 }
 $('notesBtn').onclick = () => { if (togglePanel('notes')) renderNotesPanel(); };
+let notesFilter = 'all';
+const annWhere = (a) => (isPdf() ? `p.${a.start.section + 1}` : `${Math.round(a.start.percent * 100)}%`);
+// renderNotesPanel lists annotations in reading order, grouped by chapter or page,
+// with a filter by kind, colour pickers, and inline note editing.
 function renderNotesPanel(focusId) {
-  const p = $('notes'); p.replaceChildren();
-  const h = document.createElement('h3'); h.textContent = 'Notes & highlights'; p.append(h);
-  const ex = document.createElement('a'); ex.href = `/api/books/${cur.id}/export.md`; ex.textContent = 'Export as Markdown'; ex.download = 'notes.md'; p.append(ex);
-  if (!cur.anns.length) p.append(Object.assign(document.createElement('p'), { textContent: 'Select text to highlight it, or press the bookmark button.' }));
-  for (const a of cur.anns) {
-    const d = document.createElement('div'); d.className = 'ann';
-    const q = document.createElement('q');
-    q.textContent = (a.kind === 'bookmark' ? '🔖 ' : '') + (a.quote || 'Bookmark') ; q.onclick = () => jumpTo(a.start, a.kind !== 'bookmark');
-    const meta = document.createElement('small'); meta.textContent = `${Math.round(a.start.percent * 100)}% · ${a.kind}`;
-    const ta = document.createElement('textarea'); ta.rows = 2; ta.placeholder = 'Add a note…'; ta.value = a.note || '';
-    ta.hidden = a.kind === 'bookmark';
-    const acts = document.createElement('div'); acts.className = 'acts';
-    const save = document.createElement('button'); save.textContent = 'Save note'; save.hidden = a.kind === 'bookmark';
+  const p = $('notes'), el = (t, cls, txt) => Object.assign(document.createElement(t), { className: cls || '', textContent: txt || '' });
+  p.replaceChildren();
+  p.append(el('h3', '', 'Notes & highlights'));
+  const count = (k) => cur.anns.filter((a) => k === 'all' || a.kind === k).length;
+  const chips = el('div', 'chips');
+  for (const k of ['all', 'highlight', 'note', 'bookmark']) {
+    const c = el('button', 'chip' + (notesFilter === k ? ' on' : ''), `${k === 'all' ? 'All' : k[0].toUpperCase() + k.slice(1) + 's'} ${count(k)}`);
+    c.dataset.kind = k; c.onclick = () => { notesFilter = k; renderNotesPanel(); };
+    chips.append(c);
+  }
+  p.append(chips);
+  const ex = el('a', '', 'Export as Markdown'); ex.href = `/api/books/${cur.id}/export.md`; ex.download = 'notes.md'; p.append(ex);
+  const list = cur.anns.filter((a) => notesFilter === 'all' || a.kind === notesFilter)
+    .sort((x, y) => x.start.section - y.start.section || x.start.block - y.start.block || x.start.offset - y.start.offset);
+  if (!cur.anns.length) p.append(el('p', 'sum', 'Select text to highlight it, or press the bookmark button (B).'));
+  else if (!list.length) p.append(el('p', 'sum', 'Nothing of this kind yet.'));
+  let lastGroup = null;
+  for (const a of list) {
+    const group = isPdf() ? `Page ${a.start.section + 1}` : `Chapter ${a.start.section + 1}`;
+    if (group !== lastGroup) { p.append(el('div', 'grp', group)); lastGroup = group; }
+    const d = el('div', 'ann ' + a.kind);
+    const q = el('q', '', (a.kind === 'bookmark' ? '🔖 ' : '') + (a.quote || 'Bookmark'));
+    q.onclick = () => jumpTo(a.start, a.kind !== 'bookmark');
+    const meta = el('div', 'meta'); meta.append(el('small', '', `${annWhere(a)} · ${a.kind}`));
+    const ta = el('textarea'); ta.rows = 2; ta.placeholder = 'Add a note…'; ta.value = a.note || ''; ta.hidden = a.kind === 'bookmark';
+    const acts = el('div', 'acts');
+    const save = el('button', '', 'Save note'); save.hidden = a.kind === 'bookmark';
     save.onclick = async () => { await send(`/api/books/${cur.id}/annotations/${a.id}`, 'PATCH', { Note: ta.value }); await loadAnns(); };
-    const del = document.createElement('button'); del.textContent = 'Delete';
+    const del = el('button', 'danger', 'Delete');
     del.onclick = async () => { await api(`/api/books/${cur.id}/annotations/${a.id}`, { method: 'DELETE' }); await loadAnns(); };
     acts.append(save, del); d.append(q, meta, ta, acts); p.append(d);
-    if (String(a.id) === String(focusId)) { d.style.background = 'var(--bg)'; setTimeout(() => d.scrollIntoView({ block: 'center' }), 0); }
+    if (String(a.id) === String(focusId)) { d.classList.add('focus'); setTimeout(() => d.scrollIntoView({ block: 'center' }), 0); }
   }
 }
+
+/* ---------- keyboard shortcut help ---------- */
+const SHORTCUTS = [
+  ['Reading', [['Next page or chapter', '→'], ['Previous page or chapter', '←'], ['Scroll down (EPUB)', 'Space'], ['Scroll up (EPUB)', 'PageUp'], ['Bookmark this spot', 'B'], ['Back to library', 'Esc']]],
+  ['PDF', [['Zoom in', '+'], ['Zoom out', '-'], ['Reset zoom', '0']]],
+  ['Find', [['Search in this book', 'Ctrl', 'F']]],
+  ['Help', [['Show or hide this list', '?']]],
+];
+function buildHelp() {
+  const body = $('helpBody'); body.replaceChildren();
+  for (const [title, rows] of SHORTCUTS) {
+    body.append(Object.assign(document.createElement('h4'), { textContent: title }));
+    for (const [what, ...keys] of rows) {
+      const r = Object.assign(document.createElement('div'), { className: 'sc' });
+      const k = document.createElement('span');
+      for (const key of keys) k.append(Object.assign(document.createElement('kbd'), { textContent: key }));
+      r.append(Object.assign(document.createElement('span'), { textContent: what }), k); body.append(r);
+    }
+  }
+}
+function toggleHelp(show = $('helpModal').hidden) {
+  if (show && !$('helpBody').children.length) buildHelp();
+  $('helpModal').hidden = !show;
+}
+$('helpBtn').onclick = () => toggleHelp();
+$('helpClose').onclick = () => toggleHelp(false);
+$('helpModal').onclick = (e) => { if (e.target === $('helpModal')) toggleHelp(false); };
+// Capture phase so Escape closes the dialog before the reader's own handler sees it.
+addEventListener('keydown', (e) => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === '?') { e.preventDefault(); toggleHelp(); }
+  else if (e.key === 'Escape' && !$('helpModal').hidden) { e.preventDefault(); e.stopImmediatePropagation(); toggleHelp(false); }
+}, true);
 
 /* ---------- search ---------- */
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }

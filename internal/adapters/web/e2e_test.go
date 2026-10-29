@@ -459,7 +459,7 @@ func TestHighlightLifecyclePDF(t *testing.T) {
 	b := u.importAPI("h.pdf", buildPDF(pdfPages()))
 	u.library()
 	u.open("h", `#pdfWrap .textLayer span[data-b]`)
-	if u.count(`#pdfWrap canvas`) != 1 {
+	if u.count(`#pdfWrap canvas`) < 1 {
 		t.Fatal("PDF page canvas not rendered")
 	}
 	u.highlight("#pdfWrap", 0, 0, 5)

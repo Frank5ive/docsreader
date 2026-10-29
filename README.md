@@ -9,7 +9,11 @@ external services, no account.
 
 - **Resume anywhere.** Your position is stored as a reflow-stable anchor
   (chapter, paragraph, character offset) rather than a page number, so it
-  survives changes to font, size and window width. PDFs resume on the exact page.
+  survives changes to font, size and window width. PDFs resume on the exact page
+  and how far down it you were.
+- **PDFs scroll continuously** with zoom (50-300%), drawing only the pages near
+  the screen so large files stay fast.
+- **Keyboard shortcuts** for reading, bookmarks and zoom; press `?` for the list.
 - **Highlights, notes and bookmarks** in both EPUB and PDF, with Markdown export.
 - **Full-text search** across your whole library or inside one book, with
   stemming ("learning" finds "learn"). PDF text is extracted in pure Go.

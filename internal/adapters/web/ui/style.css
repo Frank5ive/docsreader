@@ -187,3 +187,31 @@ mark.hl.note{border-bottom:2px solid var(--accent)}
   #page{padding-left:1rem;padding-right:1rem}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* PDF zoom controls */
+#zoomBox{display:inline-flex;align-items:center}
+#bar .ib.zl{min-width:52px;font-size:.8rem}
+.pdfPage{flex:none}
+
+/* keyboard help */
+#helpModal{position:fixed;inset:0;z-index:20;background:#0006;display:flex;align-items:center;justify-content:center;padding:1rem}
+#helpModal[hidden]{display:none}
+#helpModal .card{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0006;width:min(560px,100%);max-height:86vh;overflow:auto;padding:1.1rem 1.3rem 1.3rem}
+#helpModal .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
+#helpModal h3{font-family:var(--serif);font-size:1.2rem}
+#helpModal h4{margin:1rem 0 .3rem;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+#helpModal .sc{display:flex;justify-content:space-between;gap:1rem;padding:.3rem 0;border-bottom:1px solid var(--line);font-size:.92rem}
+#helpModal kbd{font:600 .78rem ui-monospace,monospace;background:var(--bg);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:.05rem .4rem;margin-left:.25rem}
+
+/* notes panel */
+#notes .chips{display:flex;flex-wrap:wrap;gap:.35rem;margin:.6rem 0 .3rem}
+#notes .sum{color:var(--muted);font-size:.82rem;margin:.2rem 0 .4rem}
+#notes .grp{margin:1rem 0 .2rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.ann{position:relative;border:1px solid var(--line);border-radius:10px;padding:.65rem .75rem;margin:.5rem 0;background:var(--bg);border-bottom:1px solid var(--line)}
+.ann.focus{outline:2px solid var(--accent)}
+.ann q{border-left-width:4px}
+.ann.highlight q{border-left-color:#e6b400}.ann.bookmark q{border-left-color:var(--muted)}.ann.note q{border-left-color:var(--accent)}
+.ann .meta{display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-top:.1rem}
+.ann .acts{margin-top:.5rem}
+.ann .acts button{font-size:.8rem;padding:.2rem .55rem}
+.ann .acts .danger{margin-left:auto;color:#c0392b}

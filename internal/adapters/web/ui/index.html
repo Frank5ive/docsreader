@@ -14,6 +14,7 @@
   </button>
   <span id="title">docsreader</span>
   <span id="spacer"></span>
+  <span id="zoomBox"><button id="zoomOut" class="ib txt" hidden title="Zoom out (-)" aria-label="Zoom out">&minus;</button><button id="zoomLbl" class="ib txt zl" hidden title="Reset zoom (0)" aria-label="Reset zoom">100%</button><button id="zoomIn" class="ib txt" hidden title="Zoom in (+)" aria-label="Zoom in">+</button></span>
   <button id="tocBtn" class="ib" hidden title="Contents" aria-label="Contents">
     <svg class="ic" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
   </button>
@@ -29,6 +30,7 @@
   <button id="histBtn" class="ib" hidden title="Reading history" aria-label="History">
     <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
   </button>
+  <button id="helpBtn" class="ib txt" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
   <button id="setBtn" class="ib txt" title="Display settings" aria-label="Display settings">Aa</button>
 </header>
 
@@ -87,6 +89,9 @@
     <div><button id="noteSave" class="primary">Save</button> <button id="noteCancel">Cancel</button></div></div>
 </div>
 <div id="hlbar" hidden><button id="hlRemove">Remove highlight</button> <button id="hlNotes">Note</button></div>
+<div id="helpModal" hidden role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div class="card"><div class="hd"><h3>Keyboard shortcuts</h3><button id="helpClose" class="ib" aria-label="Close">&times;</button></div><div id="helpBody"></div></div>
+</div>
 <div id="dropveil" hidden>Drop books to add them</div>
 <div id="toast" hidden></div>
 <script type="module" src="app.js"></script>
