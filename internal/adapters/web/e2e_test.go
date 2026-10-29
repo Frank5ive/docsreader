@@ -8,6 +8,7 @@ package web_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -663,5 +665,152 @@ func TestBackupDownloadLink(t *testing.T) {
 	}
 	if got := eval[string](u, `document.getElementById('backupLink').getAttribute('href')`); got != "/api/backup" {
 		t.Errorf("backup link href = %q", got)
+	}
+}
+
+// ---------------------------------------------------------------- redesigned UI
+
+func TestEmptyLibraryAndDragDrop(t *testing.T) {
+	u := start(t)
+	if !strings.Contains(u.text(`#empty`), "library is empty") || u.count(`#empty:not([hidden])`) != 1 {
+		t.Fatal("empty state not shown for a new library")
+	}
+	drop := func(name string, data []byte) {
+		u.js(fmt.Sprintf(`(() => {
+			const arr = Uint8Array.from(atob(%q), (c) => c.charCodeAt(0));
+			const dt = new DataTransfer(); dt.items.add(new File([arr], %q));
+			window.dispatchEvent(new DragEvent('dragenter', {dataTransfer: dt, bubbles: true, cancelable: true}));
+		})()`, base64.StdEncoding.EncodeToString(data), name))
+	}
+	drop("dropped.epub", buildEPUB("Dropped Book", 1, 3, nil))
+	if u.count(`#dropveil:not([hidden])`) != 1 {
+		t.Error("drop overlay not shown while dragging files over the page")
+	}
+	u.js(fmt.Sprintf(`(() => {
+		const arr = Uint8Array.from(atob(%q), (c) => c.charCodeAt(0));
+		const dt = new DataTransfer(); dt.items.add(new File([arr], 'dropped.epub'));
+		window.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+	})()`, base64.StdEncoding.EncodeToString(buildEPUB("Dropped Book", 1, 3, nil))))
+	u.run(chromedp.Sleep(1500 * time.Millisecond))
+	if n := u.count(`#shelf .card`); n != 1 {
+		t.Fatalf("dropped book not added: %d cards", n)
+	}
+	if u.count(`#empty:not([hidden])`) != 0 || u.count(`#dropveil:not([hidden])`) != 0 {
+		t.Error("empty state or drop overlay still visible after a drop")
+	}
+	// Unsupported files are refused with a message instead of an error.
+	u.js(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'notes.txt'));
+		window.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true})); })()`)
+	u.run(chromedp.Sleep(400 * time.Millisecond))
+	if !strings.Contains(u.text(`#toast`), "Only EPUB and PDF") || u.count(`#shelf .card`) != 1 {
+		t.Errorf("unsupported drop not handled: toast %q, %d cards", u.text(`#toast`), u.count(`#shelf .card`))
+	}
+}
+
+func TestGeneratedCovers(t *testing.T) {
+	u := start(t)
+	u.importAPI("a.epub", buildEPUB("Alpha Book", 1, 3, nil))
+	u.importAPI("b.pdf", buildPDF(pdfPages()))
+	u.library()
+	if n := u.count(`#shelf .cover.gen`); n != 2 {
+		t.Fatalf("want a generated cover for each book, got %d", n)
+	}
+	hues := eval[[]string](u, `[...document.querySelectorAll('#shelf .cover.gen')].map((c) => c.style.getPropertyValue('--h'))`)
+	if len(hues) != 2 || hues[0] == hues[1] {
+		t.Errorf("covers should differ per book: %v", hues)
+	}
+	badges := eval[[]string](u, `[...document.querySelectorAll('#shelf .cover .fmt')].map((c) => c.textContent).sort()`)
+	if len(badges) != 2 || badges[0] != "EPUB" || badges[1] != "PDF" {
+		t.Errorf("format badges = %v", badges)
+	}
+}
+
+func TestDrawersAndEscape(t *testing.T) {
+	u := start(t)
+	u.importAPI("d.epub", buildEPUB("Drawer Book", 2, 10, nil))
+	u.library()
+	u.open("Drawer Book", epubReady)
+	// The toolbar stays usable while a drawer is open: the same button closes it.
+	u.run(chromedp.Click(`#setBtn`), chromedp.WaitVisible(`#settings`))
+	if u.count(`#scrim:not([hidden])`) != 1 {
+		t.Error("scrim not shown behind an open drawer")
+	}
+	u.run(chromedp.Click(`#setBtn`), chromedp.Sleep(300*time.Millisecond))
+	if u.count(`#settings:not([hidden])`) != 0 || u.count(`#scrim:not([hidden])`) != 0 {
+		t.Error("clicking the toolbar button again did not close the drawer")
+	}
+	// Clicking the scrim closes it too.
+	u.run(chromedp.Click(`#tocBtn`), chromedp.WaitVisible(`#toc`), chromedp.MouseClickXY(150, 400), chromedp.Sleep(300*time.Millisecond))
+	if u.count(`#toc:not([hidden])`) != 0 {
+		t.Error("clicking outside did not close the drawer")
+	}
+	// Escape closes a drawer first and only then leaves the book.
+	u.run(chromedp.Click(`#notesBtn`), chromedp.WaitVisible(`#notes`), chromedp.KeyEvent("\x1b"), chromedp.Sleep(400*time.Millisecond))
+	if u.count(`#notes:not([hidden])`) != 0 || u.count(`#reader:not([hidden])`) != 1 {
+		t.Error("first Escape should close the drawer and stay in the book")
+	}
+	u.run(chromedp.KeyEvent("\x1b"), chromedp.Sleep(600*time.Millisecond))
+	if u.count(`#library:not([hidden])`) != 1 {
+		t.Error("second Escape should return to the library")
+	}
+}
+
+func TestReadingChromeAndFooter(t *testing.T) {
+	u := start(t)
+	u.importAPI("c.epub", buildEPUB("Chrome Book", 3, 20, nil))
+	u.library()
+	u.open("Chrome Book", epubReady)
+	if u.text(`#chap`) != "Chapter 1" {
+		t.Errorf("chapter label = %q, want Chapter 1", u.text(`#chap`))
+	}
+	if !strings.Contains(u.text(`#left`), "left") {
+		t.Errorf("time left missing from footer: %q", u.text(`#left`))
+	}
+	// Scrolling down with the wheel tucks the toolbars away; up or hovering the edge brings them back.
+	u.js(`window.dispatchEvent(new WheelEvent('wheel', {deltaY: 120}))`)
+	if u.count(`body.chrome-hidden`) != 1 {
+		t.Error("toolbars not hidden after scrolling down")
+	}
+	u.js(`window.dispatchEvent(new WheelEvent('wheel', {deltaY: -120}))`)
+	if u.count(`body.chrome-hidden`) != 0 {
+		t.Error("toolbars not restored after scrolling up")
+	}
+	u.js(`window.dispatchEvent(new WheelEvent('wheel', {deltaY: 120}))`)
+	u.js(`window.dispatchEvent(new MouseEvent('mousemove', {clientY: 10}))`)
+	if u.count(`body.chrome-hidden`) != 0 {
+		t.Error("toolbars not restored by moving the pointer to the top edge")
+	}
+	// Programmatic jumps (restoring a position) must never hide them.
+	u.scrollToBlock(15)
+	if u.count(`body.chrome-hidden`) != 0 {
+		t.Error("toolbars hidden by a non-user scroll")
+	}
+	// Jumping chapters updates the chapter label.
+	u.js(`document.getElementById('tocBtn').click(); document.querySelectorAll('#toc a')[2].click()`)
+	u.run(chromedp.Sleep(900 * time.Millisecond))
+	if u.text(`#chap`) != "Chapter 3" {
+		t.Errorf("chapter label after jump = %q, want Chapter 3", u.text(`#chap`))
+	}
+}
+
+func TestDefaultThemeFollowsSystem(t *testing.T) {
+	u := start(t)
+	set := func(scheme string) {
+		u.run(emulation.SetEmulatedMedia().WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: scheme}}))
+		u.library()
+	}
+	set("dark")
+	if got := eval[string](u, `document.body.dataset.theme`); got != "dark" {
+		t.Errorf("OS dark: theme = %q", got)
+	}
+	set("light")
+	if got := eval[string](u, `document.body.dataset.theme`); got != "light" {
+		t.Errorf("OS light: theme = %q (a default must not be frozen into storage)", got)
+	}
+	// An explicit choice wins over the OS.
+	u.js(`(() => { const s = document.getElementById('theme'); s.value = 'sepia'; s.dispatchEvent(new Event('input', {bubbles: true})); })()`)
+	set("dark")
+	if got := eval[string](u, `document.body.dataset.theme`); got != "sepia" {
+		t.Errorf("explicit theme lost: %q", got)
 	}
 }

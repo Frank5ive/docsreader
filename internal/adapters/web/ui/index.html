@@ -3,31 +3,51 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>docsreader</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-theme="light">
 <header id="bar">
-  <button id="home" title="Library">&#9776;</button>
+  <button id="home" class="ib" title="Library (Esc)" aria-label="Library">
+    <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+  </button>
   <span id="title">docsreader</span>
   <span id="spacer"></span>
-  <button id="tocBtn" hidden title="Contents">TOC</button>
-  <button id="markBtn" hidden title="Bookmark this page or spot (B)">&#128278; Bookmark</button>
-  <button id="notesBtn" hidden title="Highlights, notes and bookmarks">Notes</button>
-  <button id="findBtn" hidden title="Search in book">Find</button>
-  <button id="histBtn" hidden title="Reading history">History</button>
-  <button id="setBtn" title="Display settings">Aa</button>
+  <button id="tocBtn" class="ib" hidden title="Contents" aria-label="Contents">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+  </button>
+  <button id="markBtn" class="ib" hidden title="Bookmark this page or spot (B)" aria-label="Bookmark">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+  </button>
+  <button id="notesBtn" class="ib" hidden title="Highlights, notes and bookmarks" aria-label="Notes">
+    <svg class="ic" viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4z"/></svg>
+  </button>
+  <button id="findBtn" class="ib" hidden title="Search in book (Ctrl+F)" aria-label="Find">
+    <svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+  </button>
+  <button id="histBtn" class="ib" hidden title="Reading history" aria-label="History">
+    <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+  </button>
+  <button id="setBtn" class="ib txt" title="Display settings" aria-label="Display settings">Aa</button>
 </header>
 
 <main id="library">
   <section id="continue"></section>
-  <input id="libSearch" type="search" placeholder="Search all your books…" autocomplete="off">
+  <div class="searchbox">
+    <svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="libSearch" type="search" placeholder="Search your books…" autocomplete="off">
+  </div>
   <div id="libHits"></div>
   <div class="row">
     <h2>Library</h2>
-    <span class="acts"><a class="btn" id="backupLink" href="/api/backup" download title="Download all your books, positions and notes as one file">Backup</a> <label class="btn">Add books<input id="upload" type="file" accept=".epub,.pdf" multiple hidden></label></span>
+    <span class="acts"><a class="btn" id="backupLink" href="/api/backup" download title="Download all your books, positions and notes as one file">Backup</a> <label class="btn primary">Add books<input id="upload" type="file" accept=".epub,.pdf" multiple hidden></label></span>
   </div>
   <div id="tagbar"></div>
+  <label id="empty" for="upload" hidden>
+    <b>Your library is empty</b>
+    <span>Drop EPUB or PDF files anywhere on this page, or click to choose files.</span>
+  </label>
   <div id="shelf"></div>
   <section id="stats"></section>
 </main>
@@ -36,25 +56,22 @@
   <article id="page"></article>
   <div id="pdfWrap" hidden></div>
   <footer id="foot">
-    <button id="prev">&larr;</button>
-    <input id="seek" type="range" min="0" max="1000" value="0">
-    <span id="pct"></span>
-    <button id="next">&rarr;</button>
+    <button id="prev" class="ib" title="Previous (←)" aria-label="Previous"><svg class="ic" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <div class="track">
+      <input id="seek" type="range" min="0" max="1000" value="0" aria-label="Position in book">
+      <div class="meta"><span id="chap"></span><span><span id="pct"></span><span id="left"></span></span></div>
+    </div>
+    <button id="next" class="ib" title="Next (→)" aria-label="Next"><svg class="ic" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
   </footer>
 </main>
 
+<div id="scrim" hidden></div>
 <aside id="toc" hidden></aside>
 <aside id="history" hidden></aside>
 <aside id="notes" hidden></aside>
 <aside id="find" hidden><input id="findInput" type="search" placeholder="Search this book…" autocomplete="off"><div id="findHits"></div></aside>
-<div id="selbar" hidden>
-  <div id="selBtns"><button id="hlBtn">Highlight</button> <button id="noteBtn">Add note</button></div>
-  <div id="noteForm" hidden><textarea id="noteText" rows="3" placeholder="Write a note… (Ctrl+Enter to save)"></textarea>
-    <div><button id="noteSave">Save</button> <button id="noteCancel">Cancel</button></div></div>
-</div>
-<div id="hlbar" hidden><button id="hlRemove">Remove highlight</button> <button id="hlNotes">Note</button></div>
-<div id="toast" hidden></div>
 <aside id="settings" hidden>
+  <h3>Display</h3>
   <label>Theme
     <select id="theme"><option>light</option><option>sepia</option><option>dark</option></select></label>
   <label>Font
@@ -62,8 +79,16 @@
   <label>Size <input id="size" type="range" min="14" max="30" value="19"></label>
   <label>Line height <input id="lh" type="range" min="12" max="22" value="17"></label>
   <label>Width <input id="width" type="range" min="40" max="100" value="68"></label>
-  <label><input id="focus" type="checkbox"> Focus mode</label>
+  <label class="check"><input id="focus" type="checkbox"> Focus mode <small>dims everything but the paragraph you are reading</small></label>
 </aside>
+<div id="selbar" hidden>
+  <div id="selBtns"><button id="hlBtn">Highlight</button> <button id="noteBtn">Add note</button></div>
+  <div id="noteForm" hidden><textarea id="noteText" rows="3" placeholder="Write a note… (Ctrl+Enter to save)"></textarea>
+    <div><button id="noteSave" class="primary">Save</button> <button id="noteCancel">Cancel</button></div></div>
+</div>
+<div id="hlbar" hidden><button id="hlRemove">Remove highlight</button> <button id="hlNotes">Note</button></div>
+<div id="dropveil" hidden>Drop books to add them</div>
+<div id="toast" hidden></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

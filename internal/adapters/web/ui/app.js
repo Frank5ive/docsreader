@@ -8,10 +8,12 @@ const send = (url, method, body) =>
   api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 /* ---------- settings ---------- */
-const defaults = { theme: 'light', font: 'serif', size: 19, lh: 17, width: 68, focus: false };
+const systemDark = matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+const defaults = { theme: systemDark ? 'dark' : 'light', font: 'serif', size: 19, lh: 17, width: 68, focus: false };
 let prefs = { ...defaults, ...safeParse(localStorage.getItem('prefs')) };
 function safeParse(s) { try { return JSON.parse(s) || {}; } catch { return {}; } }
-function applyPrefs() {
+// Preferences are stored only once the user changes something, so the default theme keeps following the OS.
+function applyPrefs(persist = false) {
   document.body.dataset.theme = prefs.theme;
   const p = $('page');
   p.dataset.font = prefs.font;
@@ -21,12 +23,12 @@ function applyPrefs() {
   p.classList.toggle('focus', prefs.focus);
   for (const k of ['theme', 'font', 'size', 'lh', 'width']) $(k).value = prefs[k];
   $('focus').checked = prefs.focus;
-  localStorage.setItem('prefs', JSON.stringify(prefs));
+  if (persist) localStorage.setItem('prefs', JSON.stringify(prefs));
 }
 for (const k of ['theme', 'font', 'size', 'lh', 'width']) {
-  $(k).oninput = () => { prefs[k] = $(k).type === 'range' ? +$(k).value : $(k).value; applyPrefs(); restore(); };
+  $(k).oninput = () => { prefs[k] = $(k).type === 'range' ? +$(k).value : $(k).value; applyPrefs(true); restore(); };
 }
-$('focus').onchange = () => { prefs.focus = $('focus').checked; applyPrefs(); trackFocus(); };
+$('focus').onchange = () => { prefs.focus = $('focus').checked; applyPrefs(true); trackFocus(); };
 $('histBtn').onclick = async () => {
   const h = $('history');
   if (!togglePanel('history')) return;
@@ -40,6 +42,15 @@ $('histBtn').onclick = async () => {
   }
 };
 const panels = ['toc', 'settings', 'history', 'notes', 'find'];
+// Watch only the panels (never the scrim itself: writing its attribute would re-trigger the observer forever).
+const syncScrim = () => {
+  const want = !panels.some((p) => !$(p).hidden);
+  if ($('scrim').hidden !== want) $('scrim').hidden = want;
+  if (!want) document.body.classList.remove('chrome-hidden');
+};
+const scrimObserver = new MutationObserver(syncScrim);
+for (const p of panels) scrimObserver.observe($(p), { attributes: true, attributeFilter: ['hidden'] });
+$('scrim').onclick = () => { for (const p of panels) $(p).hidden = true; };
 function togglePanel(id) { const open = $(id).hidden; for (const p of panels) $(p).hidden = true; $(id).hidden = !open; return open; }
 $('setBtn').onclick = ()=>togglePanel('settings');
 
@@ -48,13 +59,28 @@ $('tocBtn').onclick = () => togglePanel('toc');
 /* ---------- library ---------- */
 let cur = null; // current reading state
 $('home').onclick = showLibrary;
-$('upload').onchange = async (e) => {
-  for (const f of e.target.files) {
+async function uploadFiles(files) {
+  const books = [...files].filter((f) => /\.(epub|pdf)$/i.test(f.name));
+  if (!books.length) { toast('Only EPUB and PDF files can be added'); return; }
+  for (const f of books) {
     const fd = new FormData(); fd.append('file', f);
-    try { await api('/api/books', { method: 'POST', body: fd }); } catch (err) { alert(f.name + ': ' + err.message); }
+    toast(`Adding ${f.name}…`);
+    try { await api('/api/books', { method: 'POST', body: fd }); } catch (err) { toast(`${f.name}: ${err.message}`); }
   }
-  e.target.value = ''; loadLibrary();
-};
+  loadLibrary();
+}
+$('upload').onchange = async (e) => { await uploadFiles(e.target.files); e.target.value = ''; };
+// Drop files anywhere on the library page.
+let dragDepth = 0;
+const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+addEventListener('dragenter', (e) => { if (hasFiles(e) && !$('library').hidden) { dragDepth++; $('dropveil').hidden = false; } });
+addEventListener('dragleave', (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; $('dropveil').hidden = true; } });
+addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('dropveil').hidden = true;
+  if (!$('library').hidden) uploadFiles(e.dataTransfer.files);
+});
 
 const pct = (b) => (b.progress ? Math.round(b.progress.percent * 100) : 0);
 function ago(iso) {
@@ -64,10 +90,18 @@ function ago(iso) {
   if (s < 86400) return Math.floor(s / 3600) + ' h ago';
   return Math.floor(s / 86400) + ' d ago';
 }
+function hueOf(str) { let h = 0; for (const c of str) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; }
 function coverEl(b) {
   const d = document.createElement('div'); d.className = 'cover';
-  if (b.HasCover) { const i = new Image(); i.src = `/api/books/${b.ID}/cover`; i.alt = ''; d.replaceChildren(i); }
-  else d.textContent = b.Title;
+  if (b.HasCover) { const i = new Image(); i.src = `/api/books/${b.ID}/cover`; i.alt = ''; d.append(i); }
+  else {
+    d.classList.add('gen'); d.style.setProperty('--h', hueOf(b.Title + b.Author));
+    const t = document.createElement('div'); t.className = 'ct'; t.textContent = b.Title;
+    const a = document.createElement('div'); a.className = 'ca'; a.textContent = b.Author || '';
+    d.append(t, a);
+  }
+  const f = document.createElement('span'); f.className = 'fmt'; f.textContent = b.Format.toUpperCase();
+  d.append(f);
   return d;
 }
 function fmtDur(sec) {
@@ -76,9 +110,11 @@ function fmtDur(sec) {
 }
 // Reading speed from real data once there is enough of it, otherwise a typical 230 wpm.
 const speedOf = (st) => (st.totalSeconds >= 300 && st.wordsPerMin >= 50 && st.wordsPerMin <= 700 ? st.wordsPerMin : 230);
+function etaText(sec) { return sec < 60 ? '<1 min' : '~' + fmtDur(sec); }
 function etaOf(b, st) {
   if (!b.WordCount || !b.progress || b.progress.percent >= 0.999) return '';
-  return '~' + fmtDur((b.WordCount * (1 - b.progress.percent) / speedOf(st)) * 60) + ' left';
+  const sec = (b.WordCount * (1 - b.progress.percent) / speedOf(st)) * 60;
+  return sec < 60 ? 'under 1 min left' : '~' + fmtDur(sec) + ' left';
 }
 function statCard(label, value) {
   const d = document.createElement('div'); d.className = 'stat';
@@ -133,10 +169,12 @@ async function loadLibrary() {
     const meta = document.createElement('div'); meta.className = 'meta';
     const t = document.createElement('b'); t.textContent = b.Title; t.title = b.Title;
     const a = document.createElement('span');
-    a.textContent = b.lastRead ? `${pct(b)}% · ${ago(b.lastRead)}` : (b.Author || b.Format.toUpperCase());
+    a.textContent = b.lastRead ? `${ago(b.lastRead)}${b.Author ? ' · ' + b.Author : ''}` : (b.Author || 'Not started');
     meta.append(t, a);
     const bar = document.createElement('div'); bar.className = 'bar';
     const fill = document.createElement('i'); fill.style.width = pct(b) + '%'; bar.append(fill);
+    const cv = coverEl(b); cv.append(bar);
+    if (pct(b) > 0) { const bd = document.createElement('span'); bd.className = 'badge'; bd.textContent = pct(b) + '%'; cv.append(bd); }
     const del = document.createElement('button'); del.className = 'del'; del.textContent = '×';
     del.onclick = async (e) => { e.stopPropagation(); if (confirm('Remove "' + b.Title + '"?')) { await api('/api/books/' + b.ID, { method: 'DELETE' }); loadLibrary(); } };
     c.title = etaOf(b, st);
@@ -144,21 +182,27 @@ async function loadLibrary() {
     for (const t of b.Tags || []) { const s = document.createElement('span'); s.textContent = t; tagRow.append(s); }
     const tagBtn = document.createElement('button'); tagBtn.className = 'tagbtn'; tagBtn.textContent = '#'; tagBtn.title = 'Edit tags';
     tagBtn.onclick = (e) => { e.stopPropagation(); editTags(b, c, tagRow); };
-    c.append(coverEl(b), bar, meta, tagRow, del, tagBtn);
+    c.append(cv, meta, tagRow, del, tagBtn);
     c.onclick = () => openBook(b.ID);
     shelf.append(c);
   }
+  $('empty').hidden = books.length > 0;
   renderTagBar(books);
   filterShelf();
   const last = books.find((b) => b.progress && b.progress.percent < 0.999);
   const cont = $('continue'); cont.replaceChildren();
   if (last) {
     const h = document.createElement('div'); h.className = 'hero';
-    const info = document.createElement('div');
-    info.innerHTML = '<small>Continue reading</small><h3 style="margin:.2rem 0"></h3><span></span>';
-    info.querySelector('h3').textContent = last.Title;
-    info.querySelector('span').textContent = [`${pct(last)}% read`, ago(last.lastRead), etaOf(last, st)].filter(Boolean).join(' · ');
-    h.append(coverEl(last), info); h.onclick = () => openBook(last.ID); cont.append(h);
+    const info = document.createElement('div'); info.className = 'info';
+    const label = Object.assign(document.createElement('small'), { textContent: 'Continue reading' });
+    const title = Object.assign(document.createElement('h3'), { textContent: last.Title });
+    const sub = Object.assign(document.createElement('div'), { className: 'sub',
+      textContent: [last.Author, `${pct(last)}% read`, etaOf(last, st), ago(last.lastRead)].filter(Boolean).join(' · ') });
+    const prog = document.createElement('div'); prog.className = 'progress';
+    const pf = document.createElement('i'); pf.style.width = pct(last) + '%'; prog.append(pf);
+    const go = Object.assign(document.createElement('button'), { className: 'primary go', textContent: 'Resume' });
+    info.append(label, title, sub, prog);
+    h.append(coverEl(last), info, go); h.onclick = () => openBook(last.ID); cont.append(h);
   }
   renderStats(st, times, books);
 }
@@ -166,6 +210,7 @@ async function showLibrary() {
   clearTimeout(saveT); await flush(); stopTimer(); cur = null;
   $('library').hidden = false; $('reader').hidden = true; for (const p of panels) $(p).hidden = true;
   $('selbar').hidden = $('hlbar').hidden = true;
+  document.body.classList.remove('reading', 'chrome-hidden'); $('chap').textContent = $('left').textContent = '';
   for (const b of ['tocBtn', 'histBtn', 'markBtn', 'notesBtn', 'findBtn']) $(b).hidden = true; $('title').textContent = 'docsreader';
   loadLibrary();
 }
@@ -174,7 +219,9 @@ async function showLibrary() {
 async function openBook(id, target) {
   const info = await api('/api/books/' + id);
   cur = { id, book: info.book, toc: info.toc, sectionWords: info.sectionWords, anchor: target || (info.hasProgress ? info.progress : null), section: 0, pdf: null, anns: [] };
-  $('library').hidden = true; $('reader').hidden = false;
+  $('library').hidden = true; $('reader').hidden = false; document.body.classList.add('reading');
+  // Only refreshes the label: calling onScroll() here could record a position before the saved one is restored.
+  api('/api/stats').then((st) => { if (cur) { cur.wpm = speedOf(st); if (cur.anchor) updateLeft(cur.anchor.percent); } }).catch(() => {});
   $('findInput').value = ''; $('findHits').replaceChildren(); // never carry one book's search into another
   $('title').textContent = info.book.Title;
   const pdfBook = info.book.Format === 'pdf';
@@ -277,13 +324,24 @@ function trackFocus() {
   }
 }
 let saveT = 0, dirty = false;
+function updateLeft(percent) {
+  const words = cur.book.WordCount;
+  $('left').textContent = words && percent < 0.999
+    ? ` · ${etaText(words * (1 - percent) / (cur.wpm || 230) * 60)} left` : '';
+}
 function onScroll() {
-  if (!cur || $('reader').hidden) return;
+  if (!cur || $('reader').hidden || (cur.book.Format === 'pdf' && !cur.pdf)) return; // PDF still loading
   const a = currentAnchor(); cur.anchor = a;
   $('pct').textContent = cur.book.Format === 'pdf'
     ? `p.${cur.pdfPage + 1}/${cur.pdf.numPages}` : Math.round(a.percent * 100) + '%';
   $('seek').value = Math.round(a.percent * 1000);
-  if (cur.book.Format === 'epub') trackFocus();
+  if (cur.book.Format === 'epub') {
+    trackFocus();
+    // Current chapter: the last contents entry at or before this section.
+    const ch = (cur.toc || []).filter((c) => c.Section <= cur.section).pop();
+    $('chap').textContent = ch ? ch.Title : '';
+  }
+  updateLeft(a.percent);
   updateMarkBtn();
   dirty = true; clearTimeout(saveT); saveT = setTimeout(flush, 1000);
   activity();
@@ -322,7 +380,7 @@ addEventListener('keydown', (e) => {
   if ($('reader').hidden || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); step(1); }
   if (['ArrowLeft', 'PageUp'].includes(e.key)) { e.preventDefault(); step(-1); }
-  if (e.key === 'Escape') showLibrary();
+  if (e.key === 'Escape') { if (panels.some((p) => !$(p).hidden)) $('scrim').click(); else showLibrary(); }
   if (e.key === 'b') toggleBookmark();
 });
 
@@ -622,3 +680,16 @@ addEventListener('keydown', (e) => {
 
 // Surface unexpected errors instead of leaving a silently blank reader.
 addEventListener('unhandledrejection', (e) => toast('Error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason)));
+
+/* ---------- immersive reading: toolbars step aside while you read ---------- */
+// Only real user scrolling (wheel / touch) hides them, never programmatic jumps.
+const inReader = () => !$('reader').hidden && $('scrim').hidden;
+addEventListener('wheel', (e) => { if (inReader() && Math.abs(e.deltaY) > 2) document.body.classList.toggle('chrome-hidden', e.deltaY > 0); }, { passive: true });
+let touchY = 0;
+addEventListener('touchstart', (e) => { touchY = e.touches[0].clientY; }, { passive: true });
+addEventListener('touchmove', (e) => {
+  if (!inReader()) return;
+  const y = e.touches[0].clientY;
+  if (Math.abs(y - touchY) > 8) { document.body.classList.toggle('chrome-hidden', y < touchY); touchY = y; }
+}, { passive: true });
+addEventListener('mousemove', (e) => { if (e.clientY < 64 || e.clientY > innerHeight - 80) document.body.classList.remove('chrome-hidden'); }, { passive: true });
