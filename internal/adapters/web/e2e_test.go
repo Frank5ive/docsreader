@@ -46,10 +46,14 @@ func start(t *testing.T) *ui {
 	t.Helper()
 	dir := t.TempDir()
 	ts, s := newServer(t, dir)
-	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("no-sandbox", true), chromedp.WindowSize(1100, 800))
+	// A cold Chrome on a CI runner can take longer than chromedp's default 20s to
+	// open its DevTools socket; /dev/shm is also tiny there.
+	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("disable-gpu", true),
+		chromedp.WSURLReadTimeout(90*time.Second), chromedp.WindowSize(1100, 800))
 	a, cancelA := chromedp.NewExecAllocator(context.Background(), opts...)
 	c, cancelC := chromedp.NewContext(a)
-	c, cancelT := context.WithTimeout(c, 45*time.Second)
+	c, cancelT := context.WithTimeout(c, 120*time.Second)
 	t.Cleanup(func() { cancelT(); cancelC(); cancelA() })
 	u := &ui{t: t, ctx: c, ts: ts, srv: s, dir: dir}
 	chromedp.ListenTarget(c, func(ev any) {
